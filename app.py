@@ -95,7 +95,7 @@ def delete_correspondance(id):
 
 def fill_empty_columns(df):
     """
-    Remplit les colonnes A et F vides en se basant sur les paires de valeurs B-C.
+    Remplit les colonnes A (Date) et F (Denomination) vides en se basant sur les paires de valeurs B (Reference) et C (Code).
     Si une ligne a les colonnes A et F vides, cherche une autre ligne avec les mêmes
     valeurs B et C et copie les valeurs A et F de cette ligne.
     """
@@ -109,16 +109,32 @@ def fill_empty_columns(df):
     
     # Obtenir les noms des colonnes 
     col_names = df.columns.tolist()
-    col_a = col_names[0]  # Colonne A
     
-    # Déterminer les colonnes B, C et F
+    # Utiliser les noms de colonnes si disponibles, sinon utiliser les index
+    if 'Date' in col_names:
+        col_a = 'Date'  # Colonne Date
+    else:
+        col_a = col_names[0]  # Colonne A (fallback)
+    
+    # Déterminer les colonnes B (Reference), C (Code) et F (Denomination)
     # Structure attendue après split et secteurs:
-    # index 0=A, 1=B, 2=Extension, 3-5=Secteurs, 6=C, 7=D, 8=E, 9=F
-    col_b = col_names[1] if len(col_names) > 1 else col_a  # Colonne B
-    # Colonne C est après les secteurs (index 6)
-    col_c = col_names[6] if len(col_names) > 6 else (col_names[3] if len(col_names) > 3 else col_names[2])
-    # Colonne F est à l'index 9 si disponible, sinon à la fin
-    col_f = col_names[9] if len(col_names) > 9 else (col_names[6] if len(col_names) > 6 else col_names[5])
+    # index 0=Date, 1=Reference, 2=Extension, 3-5=Secteurs, 6=Code, 7-9=..., 10=Denomination
+    if 'Reference' in col_names:
+        col_b = 'Reference'  # Colonne Reference
+    else:
+        col_b = col_names[1] if len(col_names) > 1 else col_a  # Colonne B (fallback)
+    
+    # Colonne C (Code) est après les secteurs (index 6)
+    if 'Code' in col_names:
+        col_c = 'Code'
+    else:
+        col_c = col_names[6] if len(col_names) > 6 else (col_names[3] if len(col_names) > 3 else col_names[2])
+    
+    # Colonne F (Denomination) est à l'index 10 si disponible, sinon à l'index 5
+    if 'Denomination' in col_names:
+        col_f = 'Denomination'
+    else:
+        col_f = col_names[9] if len(col_names) > 9 else (col_names[6] if len(col_names) > 6 else col_names[5])
     
     # Parcourir chaque ligne
     for idx in df_result.index:
@@ -162,7 +178,7 @@ def fill_empty_columns(df):
 
 def split_column_1(df):
     """
-    Éclate la colonne 1 (colonne B) en deux colonnes en séparant à gauche et à droite du point.
+    Éclate la colonne Reference en deux colonnes en séparant à gauche et à droite du point.
     Exemple: "123.456" devient colonne 1: "123", colonne 2: "456"
     """
     # Créer une copie du dataframe
@@ -173,7 +189,12 @@ def split_column_1(df):
         return df_result
     
     col_names = df.columns.tolist()
-    col_1 = col_names[1]  # Colonne 1 (colonne B, index 1)
+    
+    # Utiliser le nom de colonne si disponible, sinon utiliser l'index
+    if 'Reference' in col_names:
+        col_1 = 'Reference'
+    else:
+        col_1 = col_names[1]  # Colonne 1 (colonne B, index 1)
     
     # Extraire les valeurs de la colonne 1
     values = df_result[col_1].astype(str)
@@ -205,7 +226,7 @@ def split_column_1(df):
 def add_concatenated_column(df):
     """
     Ajoute une colonne concaténée en première position.
-    Format: colonne_1 . extension / Pos (colonne 2) / Secteur prioritaire
+    Format: colonne_1 . extension / Pos (Code) / Secteur prioritaire
     Ordre de priorité des secteurs: PE > TEX > ALU
     """
     df_result = df.copy()
@@ -217,14 +238,21 @@ def add_concatenated_column(df):
     
     col_names = df.columns.tolist()
     
-    # Colonne 1 = B partie gauche (index 1 après split)
-    col_1 = col_names[1] if len(col_names) > 1 else col_names[0]
+    # Utiliser les noms de colonnes si disponibles, sinon utiliser les index
+    # Colonne 1 = Reference partie gauche (index 1 après split)
+    if 'Reference' in col_names:
+        col_1 = 'Reference'
+    else:
+        col_1 = col_names[1] if len(col_names) > 1 else col_names[0]
     
     # col_1_partie_droite = Extension (index 2 après split)
     col_extension = col_names[2] if len(col_names) > 2 else col_names[1]
     
-    # Colonne 2 (C) pour la partie Pos (index 6 après secteurs)
-    col_2 = col_names[6] if len(col_names) > 6 else col_names[3]
+    # Colonne 2 (Code) pour la partie Pos (index 6 après secteurs)
+    if 'Code' in col_names:
+        col_2 = 'Code'
+    else:
+        col_2 = col_names[6] if len(col_names) > 6 else col_names[3]
     
     # Colonnes de secteurs (index 3, 4, 5 : PE, ALU, TEX)
     col_pe = col_names[3] if len(col_names) > 3 else None
@@ -252,14 +280,14 @@ def add_concatenated_column(df):
         val_alu_str = str(val_alu).strip() if pd.notna(val_alu) and val_alu != '' else ''
         val_tex_str = str(val_tex).strip() if pd.notna(val_tex) and val_tex != '' else ''
         
-        # Déterminer le secteur prioritaire (PE > TEX > ALU)
+        # Déterminer le secteur prioritaire (ALU > PE > TEX)
         secteur_prioritaire = ''
-        if val_pe_str:
+        if val_alu_str:
+            secteur_prioritaire = val_alu_str
+        elif val_pe_str:
             secteur_prioritaire = val_pe_str
         elif val_tex_str:
             secteur_prioritaire = val_tex_str
-        elif val_alu_str:
-            secteur_prioritaire = val_alu_str
         
         # Concaténation selon le schéma: colonne_1 . extension / Pos / Secteur
         parts = []
@@ -277,7 +305,13 @@ def add_concatenated_column(df):
         concat_val = '/'.join(parts) if parts else ''
         concat_values.append(concat_val)
     
-    # Insérer la colonne concaténée en première position (index 0)
+    # Créer un nouveau dataframe avec la colonne concaténée en première position
+    # Si la colonne 'Reference' existe déjà, on la remplace par la version concaténée
+    if 'Reference' in df_result.columns:
+        # Supprimer l'ancienne colonne 'Reference'
+        df_result = df_result.drop(columns=['Reference'])
+    
+    # Insérer la colonne concaténée à la première position
     df_result.insert(0, 'Reference', concat_values)
     
     return df_result
@@ -285,7 +319,7 @@ def add_concatenated_column(df):
 def merge_with_correspondances(df):
     """
     Effectue un merge (left join) avec la table de correspondances basé sur la dénomination.
-    La colonne de dénomination dans le fichier transformé est à l'index 9 (colonne F originale).
+    La colonne de dénomination dans le fichier transformé est la colonne 'Denomination'.
     """
     df_result = df.copy()
     
@@ -301,9 +335,12 @@ def merge_with_correspondances(df):
         st.warning("⚠️ Aucune correspondance trouvée dans la base de données. Le merge ne peut pas être effectué.")
         return df_result
     
-    # La colonne de dénomination est à l'index 9 (colonne F originale après transformations)
+    # La colonne de dénomination est 'Denomination' si disponible, sinon index 9
     col_names = df.columns.tolist()
-    denomination_col = col_names[9]
+    if 'Denomination' in col_names:
+        denomination_col = 'Denomination'
+    else:
+        denomination_col = col_names[9]  # Fallback sur l'index
     
     # Faire le merge avec les correspondances
     df_result = df_result.reset_index(drop=True)
@@ -330,6 +367,26 @@ def merge_with_correspondances(df):
     df_merged = df_merged.drop(columns=['denomination_key'])
     
     return df_merged
+
+def clean_height_column(df):
+    """
+    Nettoie la colonne 'Hauteur' en supprimant les astérisques (*) et les espaces avant et après.
+    """
+    df_result = df.copy()
+    
+    # Vérifier si la colonne 'Hauteur' existe
+    col_names = df_result.columns.tolist()
+    if 'Hauteur' in col_names:
+        # Appliquer le nettoyage : supprimer les astérisques et les espaces
+        df_result['Hauteur'] = df_result['Hauteur'].astype(str).str.replace('*', '', regex=False).str.strip()
+        st.info("✅ Colonne 'Hauteur' nettoyée (astérisques et espaces supprimés)")
+    elif len(col_names) >= 8:
+        # Fallback sur l'index si la colonne nommée n'existe pas
+        height_col = col_names[7]  # Index 7 après renommage
+        df_result[height_col] = df_result[height_col].astype(str).str.replace('*', '', regex=False).str.strip()
+        st.info("✅ Colonne 'Hauteur' nettoyée (astérisques et espaces supprimés)")
+    
+    return df_result
 
 def add_sector_columns(df):
     """
@@ -431,6 +488,27 @@ with tab1:
             else:
                 df = pd.read_excel(uploaded_file, header=None)
             
+            # Nommer les colonnes selon la structure du fichier EDI
+            if len(df.columns) >= 11:
+                df.columns = [
+                    'Date',           # Colonne 0
+                    'Reference',      # Colonne 1
+                    'Position',           # Colonne 2
+                    'Libelle_Quantite', # Colonne 3
+                    'Quantite',       # Colonne 4
+                    'Denomination',   # Colonne 5
+                    'Largeur',        # Colonne 6 (renommé de Longueur)
+                    'Hauteur',        # Colonne 7 (renommé de Surface_Poids)
+                    'Code_G1',        # Colonne 8
+                    'Code_G2',        # Colonne 9
+                    'Reference_Dupliquee'  # Colonne 10
+                ]
+                # Ajouter des colonnes vides si nécessaire pour les colonnes 11+
+                if len(df.columns) > 11:
+                    for i in range(11, len(df.columns)):
+                        df.columns.values[i] = f'Colonne_{i}'
+                st.success("✅ Colonnes renommées avec succès")
+            
             # Afficher le fichier original
             st.subheader("📄 Fichier original")
             st.dataframe(df, use_container_width=True)
@@ -460,6 +538,9 @@ with tab1:
                     st.info(f"🔍 Debug: Le fichier a {len(df.columns)} colonnes")
                     if len(df.columns) >= 6:
                         st.info(f"🔍 Debug: Colonnes A={df.columns[0]}, B={df.columns[1]}, C={df.columns[2]}, F={df.columns[5]}")
+                    
+                    # Nettoyer la colonne Hauteur (astérisques et espaces)
+                    df = clean_height_column(df)
                     
                     # Éclater la colonne 1 en deux colonnes
                     df_transformed = split_column_1(df)
