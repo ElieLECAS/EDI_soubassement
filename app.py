@@ -202,6 +202,86 @@ def split_column_1(df):
     
     return df_result
 
+def add_concatenated_column(df):
+    """
+    Ajoute une colonne concaténée en première position.
+    Format: colonne_1 . extension / Pos (colonne 2) / Secteur prioritaire
+    Ordre de priorité des secteurs: PE > TEX > ALU
+    """
+    df_result = df.copy()
+    
+    # Vérifier qu'il y a au moins 7 colonnes (pour avoir la colonne 2 = C)
+    if len(df.columns) < 7:
+        st.warning("⚠️ Le fichier doit avoir au moins 7 colonnes pour la concaténation")
+        return df_result
+    
+    col_names = df.columns.tolist()
+    
+    # Colonne 1 = B partie gauche (index 1 après split)
+    col_1 = col_names[1] if len(col_names) > 1 else col_names[0]
+    
+    # col_1_partie_droite = Extension (index 2 après split)
+    col_extension = col_names[2] if len(col_names) > 2 else col_names[1]
+    
+    # Colonne 2 (C) pour la partie Pos (index 6 après secteurs)
+    col_2 = col_names[6] if len(col_names) > 6 else col_names[3]
+    
+    # Colonnes de secteurs (index 3, 4, 5 : PE, ALU, TEX)
+    col_pe = col_names[3] if len(col_names) > 3 else None
+    col_alu = col_names[4] if len(col_names) > 4 else None
+    col_tex = col_names[5] if len(col_names) > 5 else None
+    
+    # Valeurs concaténées
+    concat_values = []
+    
+    for idx in df_result.index:
+        val_1 = df_result.loc[idx, col_1]
+        val_ext = df_result.loc[idx, col_extension]
+        val_pos = df_result.loc[idx, col_2]
+        
+        # Récupérer les valeurs des secteurs
+        val_pe = df_result.loc[idx, col_pe] if col_pe else ''
+        val_alu = df_result.loc[idx, col_alu] if col_alu else ''
+        val_tex = df_result.loc[idx, col_tex] if col_tex else ''
+        
+        # Convertir en string et gérer les NaN
+        val_1_str = str(val_1) if pd.notna(val_1) else ''
+        val_ext_str = str(val_ext) if pd.notna(val_ext) else ''
+        val_pos_str = str(val_pos) if pd.notna(val_pos) else ''
+        val_pe_str = str(val_pe).strip() if pd.notna(val_pe) and val_pe != '' else ''
+        val_alu_str = str(val_alu).strip() if pd.notna(val_alu) and val_alu != '' else ''
+        val_tex_str = str(val_tex).strip() if pd.notna(val_tex) and val_tex != '' else ''
+        
+        # Déterminer le secteur prioritaire (PE > TEX > ALU)
+        secteur_prioritaire = ''
+        if val_pe_str:
+            secteur_prioritaire = val_pe_str
+        elif val_tex_str:
+            secteur_prioritaire = val_tex_str
+        elif val_alu_str:
+            secteur_prioritaire = val_alu_str
+        
+        # Concaténation selon le schéma: colonne_1 . extension / Pos / Secteur
+        parts = []
+        if val_1_str and val_ext_str:
+            parts.append(f"{val_1_str}.{val_ext_str}")
+        elif val_1_str:
+            parts.append(val_1_str)
+        
+        if val_pos_str:
+            parts.append(val_pos_str)
+        
+        if secteur_prioritaire:
+            parts.append(secteur_prioritaire)
+        
+        concat_val = '/'.join(parts) if parts else ''
+        concat_values.append(concat_val)
+    
+    # Insérer la colonne concaténée en première position (index 0)
+    df_result.insert(0, 'Reference', concat_values)
+    
+    return df_result
+
 def merge_with_correspondances(df):
     """
     Effectue un merge (left join) avec la table de correspondances basé sur la dénomination.
@@ -393,16 +473,20 @@ with tab1:
                     # Effectuer le merge avec la table de correspondances
                     df_transformed = merge_with_correspondances(df_transformed)
                     
+                    # Ajouter la colonne concaténée en première position
+                    df_transformed = add_concatenated_column(df_transformed)
+                    
                     # Afficher le résultat
                     st.subheader("✅ Fichier transformé")
                     st.dataframe(df_transformed, use_container_width=True)
                     
-                    # Compter les modifications (après merge, le nombre de colonnes a augmenté)
+                    # Compter les modifications (après ajout de la colonne concaténée, tous les index sont décalés de 1)
                     col_names = df_transformed.columns.tolist()
-                    if len(col_names) >= 10:
-                        col_a = col_names[0]
-                        # Après le merge, la colonne F est maintenant à l'index 9
-                        col_f = col_names[9] if len(col_names) > 9 else col_names[6]
+                    if len(col_names) >= 11:
+                        # La colonne A est maintenant à l'index 1 (décalé de 1)
+                        col_a = col_names[1]
+                        # La colonne F est maintenant à l'index 10 (anciennement 9)
+                        col_f = col_names[10] if len(col_names) > 10 else col_names[7]
                         empty_after = sum((pd.isna(df_transformed[col_a]) | (df_transformed[col_a] == '')) & 
                                         (pd.isna(df_transformed[col_f]) | (df_transformed[col_f] == '')))
                         try:
@@ -479,6 +563,10 @@ with tab1:
         - Merge avec la table de correspondances :
           * Les informations (forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
           * sont ajoutées en comparant la dénomination avec celles de la base de données
+        - Ajout d'une colonne de référence en première position
+          * Format: colonne_1 . extension / Pos (colonne 2) / Secteur prioritaire
+          * Ordre de priorité des secteurs: PE > TEX > ALU
+          * Exemple: "2508568.HP2/201/PE" (où 201 est la valeur de la colonne C et PE le secteur)
         """)
 
 # ===== ONGLET 2 : GESTION DES CORRESPONDANCES =====
