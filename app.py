@@ -116,11 +116,13 @@ def fill_empty_columns(df):
     else:
         col_a = col_names[0]  # Colonne A (fallback)
     
-    # Déterminer les colonnes B (Reference), C (Code) et F (Denomination)
+    # Déterminer les colonnes B (N de cde), C (Code) et F (Denomination)
     # Structure attendue après split et secteurs:
-    # index 0=Date, 1=Reference, 2=Extension, 3-5=Secteurs, 6=Code, 7-9=..., 10=Denomination
-    if 'Reference' in col_names:
-        col_b = 'Reference'  # Colonne Reference
+    # index 0=Date, 1=N de cde, 2=Extension, 3-5=Secteurs, 6=Code, 7-9=..., 10=Denomination
+    if 'N de cde' in col_names:
+        col_b = 'N de cde'  # Colonne N de cde
+    elif 'Reference' in col_names:
+        col_b = 'Reference'  # Colonne Reference (fallback)
     else:
         col_b = col_names[1] if len(col_names) > 1 else col_a  # Colonne B (fallback)
     
@@ -179,7 +181,7 @@ def fill_empty_columns(df):
 def split_column_1(df):
     """
     Éclate la colonne Reference en deux colonnes en séparant à gauche et à droite du point.
-    Exemple: "123.456" devient colonne 1: "123", colonne 2: "456"
+    Exemple: "123.456" devient colonne 1 (N de cde): "123", colonne 2 (Extension): "456"
     """
     # Créer une copie du dataframe
     df_result = df.copy()
@@ -215,19 +217,20 @@ def split_column_1(df):
             left_values.append(str(val))
             right_values.append('')
     
-    # Mettre à jour la colonne 1 avec les valeurs de gauche
+    # Mettre à jour la colonne 1 avec les valeurs de gauche et la renommer
     df_result[col_1] = left_values
+    df_result = df_result.rename(columns={col_1: 'N de cde'})
     
     # Créer la nouvelle colonne avec les valeurs de droite juste après la colonne 1
-    df_result.insert(2, 'col_1_partie_droite', right_values)
+    df_result.insert(2, 'Extension', right_values)
     
     return df_result
 
 def add_concatenated_column(df):
     """
-    Ajoute une colonne concaténée en première position.
-    Format: colonne_1 . extension / Pos (Code) / Secteur prioritaire
-    Ordre de priorité des secteurs: PE > TEX > ALU
+    Ajoute une colonne concaténée en première position nommée "Informations à noter sur étiquette".
+    Format: N de cde . Extension / Pos (Code) / Secteur prioritaire
+    Ordre de priorité des secteurs: ALU > PE > TEX
     """
     df_result = df.copy()
     
@@ -239,14 +242,19 @@ def add_concatenated_column(df):
     col_names = df.columns.tolist()
     
     # Utiliser les noms de colonnes si disponibles, sinon utiliser les index
-    # Colonne 1 = Reference partie gauche (index 1 après split)
-    if 'Reference' in col_names:
+    # Colonne 1 = N de cde (index 1 après split)
+    if 'N de cde' in col_names:
+        col_1 = 'N de cde'
+    elif 'Reference' in col_names:
         col_1 = 'Reference'
     else:
         col_1 = col_names[1] if len(col_names) > 1 else col_names[0]
     
-    # col_1_partie_droite = Extension (index 2 après split)
-    col_extension = col_names[2] if len(col_names) > 2 else col_names[1]
+    # Extension (index 2 après split)
+    if 'Extension' in col_names:
+        col_extension = 'Extension'
+    else:
+        col_extension = col_names[2] if len(col_names) > 2 else col_names[1]
     
     # Colonne 2 (Code) pour la partie Pos (index 6 après secteurs)
     if 'Code' in col_names:
@@ -311,8 +319,8 @@ def add_concatenated_column(df):
         # Supprimer l'ancienne colonne 'Reference'
         df_result = df_result.drop(columns=['Reference'])
     
-    # Insérer la colonne concaténée à la première position
-    df_result.insert(0, 'Reference', concat_values)
+    # Insérer la colonne concaténée à la première position avec le nom "Informations à noter sur étiquette"
+    df_result.insert(0, 'Informations à noter sur étiquette', concat_values)
     
     return df_result
 
@@ -403,7 +411,12 @@ def add_sector_columns(df):
         return df_result
     
     col_names = df.columns.tolist()
-    extension_col = col_names[2]  # Colonne Extension (index 2 après split)
+    
+    # Utiliser le nom de colonne si disponible, sinon utiliser l'index
+    if 'Extension' in col_names:
+        extension_col = 'Extension'
+    else:
+        extension_col = col_names[2] if len(col_names) > 2 else col_names[1]
     
     # Extraire les valeurs de la colonne Extension
     extensions = df_result[extension_col].astype(str)
@@ -490,24 +503,21 @@ with tab1:
             
             # Nommer les colonnes selon la structure du fichier EDI
             if len(df.columns) >= 11:
+                # Garder seulement les colonnes nécessaires (supprimer Libelle_Quantite)
+                df = df.iloc[:, [0, 1, 2, 4, 5, 6, 7, 8, 9, 10]]  # Exclure colonne 3 (Libelle_Quantite)
                 df.columns = [
                     'Date',           # Colonne 0
                     'Reference',      # Colonne 1
-                    'Position',           # Colonne 2
-                    'Libelle_Quantite', # Colonne 3
-                    'Quantite',       # Colonne 4
-                    'Denomination',   # Colonne 5
-                    'Largeur',        # Colonne 6 (renommé de Longueur)
-                    'Hauteur',        # Colonne 7 (renommé de Surface_Poids)
-                    'Code_G1',        # Colonne 8
-                    'Code_G2',        # Colonne 9
-                    'Reference_Dupliquee'  # Colonne 10
+                    'Position',       # Colonne 2
+                    'Quantite',       # Colonne 3
+                    'Denomination',   # Colonne 4
+                    'Largeur',        # Colonne 5
+                    'Hauteur',        # Colonne 6
+                    'Ral intérieur',  # Colonne 7
+                    'Ral extérieur',  # Colonne 8
+                    'Reference_Dupliquee'  # Colonne 9
                 ]
-                # Ajouter des colonnes vides si nécessaire pour les colonnes 11+
-                if len(df.columns) > 11:
-                    for i in range(11, len(df.columns)):
-                        df.columns.values[i] = f'Colonne_{i}'
-                st.success("✅ Colonnes renommées avec succès")
+                st.success("✅ Colonnes renommées avec succès (Libelle_Quantite supprimée)")
             
             # Afficher le fichier original
             st.subheader("📄 Fichier original")
@@ -632,8 +642,8 @@ with tab1:
         4. Téléchargez le résultat transformé
         
         **Logique de transformation :**
-        - La colonne 1 est éclatée en deux colonnes (séparation au point)
-          Exemple: "123.456" devient colonne 1: "123" et nouvelle colonne: "456"
+        - La colonne Reference est éclatée en deux colonnes (séparation au point)
+          Exemple: "123.456" devient "N de cde": "123" et "Extension": "456"
         - Ajout de 3 colonnes de secteurs basées sur l'Extension :
           * Secteur PE : "PE" si Extension contient "P"
           * Secteur ALU : "ALU" si Extension commence par "U" ou "Y"
@@ -645,9 +655,9 @@ with tab1:
           * Les informations (forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
           * sont ajoutées en comparant la dénomination avec celles de la base de données
         - Ajout d'une colonne de référence en première position
-          * Format: colonne_1 . extension / Pos (colonne 2) / Secteur prioritaire
-          * Ordre de priorité des secteurs: PE > TEX > ALU
-          * Exemple: "2508568.HP2/201/PE" (où 201 est la valeur de la colonne C et PE le secteur)
+          * Format: N de cde . Extension / Pos (Code) / Secteur prioritaire
+          * Ordre de priorité des secteurs: ALU > PE > TEX
+          * Exemple: "2508568.HP2/201/PE" (où 201 est la valeur du Code et PE le secteur)
         """)
 
 # ===== ONGLET 2 : GESTION DES CORRESPONDANCES =====
