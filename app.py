@@ -86,17 +86,27 @@ def fill_empty_columns(df):
     # Créer une copie du dataframe
     df_result = df.copy()
     
-    # Vérifier qu'il y a au moins 6 colonnes
-    if len(df.columns) < 6:
-        st.error("Le fichier doit avoir au moins 6 colonnes (A, B, C, D, E, F)")
+    # Vérifier qu'il y a au moins 10 colonnes (après split et ajout des secteurs)
+    if len(df.columns) < 10:
+        st.warning("Le fichier transformé doit avoir au moins 10 colonnes")
         return df_result
     
-    # Obtenir les noms des colonnes (index 0=A, 1=B, 2=C, 5=F)
+    # Obtenir les noms des colonnes 
+    # Après split_column_1 et add_sector_columns: 
+    # - index 0=A, 
+    # - index 1=B partie gauche,
+    # - index 2=Extension (partie droite de B),
+    # - index 3=Secteur PE (nouveau),
+    # - index 4=Secteur ALU (nouveau),
+    # - index 5=Secteur TEX (nouveau),
+    # - index 6=C (anciennement 2, décalé de 3 positions),
+    # - index 9=F (anciennement 5, décalé de 3 positions)
     col_names = df.columns.tolist()
     col_a = col_names[0]  # Colonne A
-    col_b = col_names[1]  # Colonne B  
-    col_c = col_names[2]  # Colonne C
-    col_f = col_names[5]  # Colonne F
+    # Les colonnes B et C pour la correspondance sont maintenant aux index 1 et 6
+    col_b = col_names[1]  # Colonne B (index 1 après split)
+    col_c = col_names[6] if len(col_names) > 6 else col_names[3]  # Colonne C (index 6 après secteurs)
+    col_f = col_names[9] if len(col_names) > 9 else col_names[6]  # Colonne F (index 9 après secteurs)
     
     # Parcourir chaque ligne
     for idx in df_result.index:
@@ -135,6 +145,104 @@ def fill_empty_columns(df):
                             df_result.loc[idx, col_f] = other_f
                             st.info(f"✅ Ligne {idx}: Rempli avec les valeurs de la ligne {other_idx}")
                             break
+    
+    return df_result
+
+def split_column_1(df):
+    """
+    Éclate la colonne 1 (colonne B) en deux colonnes en séparant à gauche et à droite du point.
+    Exemple: "123.456" devient colonne 1: "123", colonne 2: "456"
+    """
+    # Créer une copie du dataframe
+    df_result = df.copy()
+    
+    # Vérifier qu'il y a au moins 2 colonnes (colonne 0 et colonne 1)
+    if len(df.columns) < 2:
+        return df_result
+    
+    col_names = df.columns.tolist()
+    col_1 = col_names[1]  # Colonne 1 (colonne B, index 1)
+    
+    # Extraire les valeurs de la colonne 1
+    values = df_result[col_1].astype(str)
+    
+    # Séparer à gauche et à droite du point
+    left_values = []
+    right_values = []
+    
+    for val in values:
+        if pd.isna(val) or val == 'nan' or val.strip() == '':
+            left_values.append('')
+            right_values.append('')
+        elif '.' in str(val):
+            parts = str(val).split('.', 1)
+            left_values.append(parts[0] if parts[0] else '')
+            right_values.append(parts[1] if len(parts) > 1 else '')
+        else:
+            left_values.append(str(val))
+            right_values.append('')
+    
+    # Mettre à jour la colonne 1 avec les valeurs de gauche
+    df_result[col_1] = left_values
+    
+    # Créer la nouvelle colonne avec les valeurs de droite juste après la colonne 1
+    df_result.insert(2, 'col_1_partie_droite', right_values)
+    
+    return df_result
+
+def add_sector_columns(df):
+    """
+    Ajoute des colonnes de secteurs basées sur la colonne Extension (index 2 après split).
+    - Secteur ligne vitrage pe: "PE" si Extension contient "P"
+    - Secteur ligne vitrage alu: "ALU" si Extension commence par "U" ou "Y"
+    - Secteur ligne vitrage textural: "TEX" si Extension contient "H", "Z" ou "X"
+    """
+    # Créer une copie du dataframe
+    df_result = df.copy()
+    
+    # Vérifier qu'il y a au moins 3 colonnes (0, 1, 2)
+    if len(df.columns) < 3:
+        return df_result
+    
+    col_names = df.columns.tolist()
+    extension_col = col_names[2]  # Colonne Extension (index 2 après split)
+    
+    # Extraire les valeurs de la colonne Extension
+    extensions = df_result[extension_col].astype(str)
+    
+    # Initialiser les colonnes de secteurs
+    secteur_pe = []
+    secteur_alu = []
+    secteur_tex = []
+    
+    for ext in extensions:
+        if pd.isna(ext) or ext == 'nan' or ext.strip() == '':
+            secteur_pe.append('')
+            secteur_alu.append('')
+            secteur_tex.append('')
+        else:
+            # Secteur PE : contient "P"
+            if 'P' in str(ext).upper():
+                secteur_pe.append('PE')
+            else:
+                secteur_pe.append('')
+            
+            # Secteur ALU : commence par "U" ou "Y"
+            if str(ext).upper().startswith('U') or str(ext).upper().startswith('Y'):
+                secteur_alu.append('ALU')
+            else:
+                secteur_alu.append('')
+            
+            # Secteur TEX : contient "H", "Z" ou "X"
+            if 'H' in str(ext).upper() or 'Z' in str(ext).upper() or 'X' in str(ext).upper():
+                secteur_tex.append('TEX')
+            else:
+                secteur_tex.append('')
+    
+    # Ajouter les trois nouvelles colonnes (on insère dans l'ordre inverse pour éviter les décalages d'index)
+    df_result.insert(3, 'Secteur ligne vitrage textural', secteur_tex)
+    df_result.insert(3, 'Secteur ligne vitrage alu', secteur_alu)
+    df_result.insert(3, 'Secteur ligne vitrage pe', secteur_pe)
     
     return df_result
 
@@ -197,7 +305,7 @@ with tab1:
                 col_names = df.columns.tolist()
                 if len(col_names) >= 6:
                     col_a = col_names[0]
-                    col_f = col_names[5]
+                    col_f = col_names[5] if len(col_names) > 5 else col_names[4]
                     empty_count = sum((pd.isna(df[col_a]) | (df[col_a] == '')) & 
                                     (pd.isna(df[col_f]) | (df[col_f] == '')))
                     st.metric("Lignes avec A et F vides", empty_count)
@@ -209,22 +317,40 @@ with tab1:
                 with st.spinner("Transformation en cours..."):
                     # Debug: afficher quelques informations
                     st.info(f"🔍 Debug: Le fichier a {len(df.columns)} colonnes")
-                    st.info(f"🔍 Debug: Colonnes A={df.columns[0]}, B={df.columns[1]}, C={df.columns[2]}, F={df.columns[5]}")
+                    if len(df.columns) >= 6:
+                        st.info(f"🔍 Debug: Colonnes A={df.columns[0]}, B={df.columns[1]}, C={df.columns[2]}, F={df.columns[5]}")
                     
-                    df_transformed = fill_empty_columns(df)
+                    # Éclater la colonne 1 en deux colonnes
+                    df_transformed = split_column_1(df)
+                    
+                    # Ajouter les colonnes de secteurs
+                    df_transformed = add_sector_columns(df_transformed)
+                    
+                    # Ensuite remplir les colonnes vides
+                    df_transformed = fill_empty_columns(df_transformed)
                     
                     # Afficher le résultat
                     st.subheader("✅ Fichier transformé")
                     st.dataframe(df_transformed, use_container_width=True)
                     
                     # Compter les modifications
-                    col_names = df.columns.tolist()
-                    if len(col_names) >= 6:
+                    col_names = df_transformed.columns.tolist()
+                    if len(col_names) >= 10:
                         col_a = col_names[0]
-                        col_f = col_names[5]
+                        col_f = col_names[9] if len(col_names) > 9 else col_names[6]
                         empty_after = sum((pd.isna(df_transformed[col_a]) | (df_transformed[col_a] == '')) & 
                                         (pd.isna(df_transformed[col_f]) | (df_transformed[col_f] == '')))
-                        st.success(f"🎉 Transformation terminée ! {empty_count - empty_after} lignes ont été remplies.")
+                        try:
+                            # Calculer empty_count depuis le dataframe original
+                            original_col_names = df.columns.tolist()
+                            if len(original_col_names) >= 6:
+                                original_col_a = original_col_names[0]
+                                original_col_f = original_col_names[5] if len(original_col_names) > 5 else original_col_names[4]
+                                original_empty_count = sum((pd.isna(df[original_col_a]) | (df[original_col_a] == '')) & 
+                                                        (pd.isna(df[original_col_f]) | (df[original_col_f] == '')))
+                                st.success(f"🎉 Transformation terminée ! {original_empty_count - empty_after} lignes ont été remplies.")
+                        except:
+                            st.success(f"🎉 Transformation terminée !")
                     
                     # Boutons de téléchargement
                     st.subheader("💾 Télécharger le résultat")
@@ -273,6 +399,12 @@ with tab1:
         4. Téléchargez le résultat transformé
         
         **Logique de transformation :**
+        - La colonne 1 est éclatée en deux colonnes (séparation au point)
+          Exemple: "123.456" devient colonne 1: "123" et nouvelle colonne: "456"
+        - Ajout de 3 colonnes de secteurs basées sur l'Extension :
+          * Secteur PE : "PE" si Extension contient "P"
+          * Secteur ALU : "ALU" si Extension commence par "U" ou "Y"
+          * Secteur TEX : "TEX" si Extension contient "H", "Z" ou "X"
         - Les colonnes A et F vides sont automatiquement remplies
         - Si une ligne a les mêmes valeurs dans les colonnes B et C qu'une autre ligne,
           les valeurs A et F de cette autre ligne sont copiées dans la ligne vide
