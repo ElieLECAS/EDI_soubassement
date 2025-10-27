@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import io
+import duckdb
+import os
+from pathlib import Path
 
 st.set_page_config(
     page_title="Transformation CSV/Excel",
@@ -9,7 +12,70 @@ st.set_page_config(
 )
 
 st.title("📊 Transformation de fichiers CSV/Excel")
-st.markdown("---")
+
+# Configuration de la base de données
+DB_PATH = "/app/data/correspondances.duckdb"
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+@st.cache_resource
+def init_database():
+    """Initialise la base de données DuckDB et crée la table si elle n'existe pas"""
+    conn = duckdb.connect(DB_PATH)
+    
+    # Créer une séquence pour l'auto-increment (si elle n'existe pas)
+    conn.execute("""
+        CREATE SEQUENCE IF NOT EXISTS correspondances_id_seq START 1
+    """)
+    
+    # Créer la table si elle n'existe pas
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS correspondances (
+            id BIGINT PRIMARY KEY DEFAULT nextval('correspondances_id_seq'),
+            denomination VARCHAR,
+            forme_panneau VARCHAR,
+            couleur_int VARCHAR,
+            couleur_ext VARCHAR,
+            epaisseur_mm REAL
+        )
+    """)
+    
+    return conn
+
+def get_all_correspondances():
+    """Récupère toutes les correspondances de la base de données"""
+    conn = init_database()
+    df = conn.execute("""
+        SELECT id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm 
+        FROM correspondances 
+        ORDER BY id
+    """).df()
+    return df
+
+def add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
+    """Ajoute une nouvelle correspondance à la base de données"""
+    conn = init_database()
+    # L'ID est automatiquement généré grâce à la séquence
+    conn.execute("""
+        INSERT INTO correspondances (denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+        VALUES (?, ?, ?, ?, ?)
+    """, [denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm])
+    st.cache_resource.clear()
+
+def update_correspondance(id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
+    """Met à jour une correspondance existante"""
+    conn = init_database()
+    conn.execute("""
+        UPDATE correspondances 
+        SET denomination = ?, forme_panneau = ?, couleur_int = ?, couleur_ext = ?, epaisseur_mm = ?
+        WHERE id = ?
+    """, [denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm, id])
+    st.cache_resource.clear()
+
+def delete_correspondance(id):
+    """Supprime une correspondance de la base de données"""
+    conn = init_database()
+    conn.execute("DELETE FROM correspondances WHERE id = ?", [id])
+    st.cache_resource.clear()
 
 def fill_empty_columns(df):
     """
@@ -72,140 +138,329 @@ def fill_empty_columns(df):
     
     return df_result
 
-# Interface de téléchargement
-st.subheader("📁 Importer votre fichier")
-uploaded_file = st.file_uploader(
-    "Glissez-déposez votre fichier CSV ou Excel ici",
-    type=['csv', 'xlsx', 'xls'],
-    help="Formats acceptés : CSV, Excel (.xlsx, .xls)"
-)
+# Créer des onglets
+tab1, tab2 = st.tabs(["🔄 Transformation de fichiers", "🗂️ Gestion des correspondances"])
 
-if uploaded_file is not None:
-    try:
-        # Lire le fichier
-        if uploaded_file.name.endswith('.csv'):
-            # Essayer différents encodages pour les CSV
-            encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'windows-1252']
-            df = None
-            for encoding in encodings:
-                try:
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(uploaded_file, sep=';', header=None, encoding=encoding)
-                    st.info(f"✅ Fichier lu avec l'encodage : {encoding}")
-                    break
-                except UnicodeDecodeError:
-                    continue
-                except Exception as e:
-                    # Essayer avec une autre séparation si le point-virgule ne fonctionne pas
+# ===== ONGLET 1 : TRANSFORMATION DE FICHIERS =====
+with tab1:
+    # Interface de téléchargement
+    st.subheader("📁 Importer votre fichier")
+    uploaded_file = st.file_uploader(
+        "Glissez-déposez votre fichier CSV ou Excel ici",
+        type=['csv', 'xlsx', 'xls'],
+        help="Formats acceptés : CSV, Excel (.xlsx, .xls)"
+    )
+
+    if uploaded_file is not None:
+        try:
+            # Lire le fichier
+            if uploaded_file.name.endswith('.csv'):
+                # Essayer différents encodages pour les CSV
+                encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'windows-1252']
+                df = None
+                for encoding in encodings:
                     try:
                         uploaded_file.seek(0)
-                        df = pd.read_csv(uploaded_file, header=None, encoding=encoding)
+                        df = pd.read_csv(uploaded_file, sep=';', header=None, encoding=encoding)
                         st.info(f"✅ Fichier lu avec l'encodage : {encoding}")
                         break
-                    except:
+                    except UnicodeDecodeError:
                         continue
+                    except Exception as e:
+                        # Essayer avec une autre séparation si le point-virgule ne fonctionne pas
+                        try:
+                            uploaded_file.seek(0)
+                            df = pd.read_csv(uploaded_file, header=None, encoding=encoding)
+                            st.info(f"✅ Fichier lu avec l'encodage : {encoding}")
+                            break
+                        except:
+                            continue
+                
+                if df is None:
+                    st.error("Impossible de lire le fichier avec les encodages supportés.")
+                    st.stop()
+            else:
+                df = pd.read_excel(uploaded_file, header=None)
             
-            if df is None:
-                st.error("Impossible de lire le fichier avec les encodages supportés.")
-                st.stop()
-        else:
-            df = pd.read_excel(uploaded_file, header=None)
-        
-        # Afficher le fichier original
-        st.subheader("📄 Fichier original")
-        st.dataframe(df, use_container_width=True)
-        
-        # Afficher les statistiques
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Nombre de lignes", len(df))
-        with col2:
-            st.metric("Nombre de colonnes", len(df.columns))
-        with col3:
-            # Compter les lignes avec colonnes A et F vides
-            col_names = df.columns.tolist()
-            if len(col_names) >= 6:
-                col_a = col_names[0]
-                col_f = col_names[5]
-                empty_count = sum((pd.isna(df[col_a]) | (df[col_a] == '')) & 
-                                (pd.isna(df[col_f]) | (df[col_f] == '')))
-                st.metric("Lignes avec A et F vides", empty_count)
-        
-        st.markdown("---")
-        
-        # Bouton de transformation
-        if st.button("🔄 Transformer le fichier", type="primary", use_container_width=True):
-            with st.spinner("Transformation en cours..."):
-                # Debug: afficher quelques informations
-                st.info(f"🔍 Debug: Le fichier a {len(df.columns)} colonnes")
-                st.info(f"🔍 Debug: Colonnes A={df.columns[0]}, B={df.columns[1]}, C={df.columns[2]}, F={df.columns[5]}")
-                
-                df_transformed = fill_empty_columns(df)
-                
-                # Afficher le résultat
-                st.subheader("✅ Fichier transformé")
-                st.dataframe(df_transformed, use_container_width=True)
-                
-                # Compter les modifications
+            # Afficher le fichier original
+            st.subheader("📄 Fichier original")
+            st.dataframe(df, use_container_width=True)
+            
+            # Afficher les statistiques
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Nombre de lignes", len(df))
+            with col2:
+                st.metric("Nombre de colonnes", len(df.columns))
+            with col3:
+                # Compter les lignes avec colonnes A et F vides
                 col_names = df.columns.tolist()
                 if len(col_names) >= 6:
                     col_a = col_names[0]
                     col_f = col_names[5]
-                    empty_after = sum((pd.isna(df_transformed[col_a]) | (df_transformed[col_a] == '')) & 
-                                    (pd.isna(df_transformed[col_f]) | (df_transformed[col_f] == '')))
-                    st.success(f"🎉 Transformation terminée ! {empty_count - empty_after} lignes ont été remplies.")
-                
-                # Boutons de téléchargement
-                st.subheader("💾 Télécharger le résultat")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Téléchargement CSV
-                    csv_buffer = io.StringIO()
-                    df_transformed.to_csv(csv_buffer, index=False, header=False, sep=';')
-                    csv_data = csv_buffer.getvalue()
+                    empty_count = sum((pd.isna(df[col_a]) | (df[col_a] == '')) & 
+                                    (pd.isna(df[col_f]) | (df[col_f] == '')))
+                    st.metric("Lignes avec A et F vides", empty_count)
+            
+            st.markdown("---")
+            
+            # Bouton de transformation
+            if st.button("🔄 Transformer le fichier", type="primary", use_container_width=True):
+                with st.spinner("Transformation en cours..."):
+                    # Debug: afficher quelques informations
+                    st.info(f"🔍 Debug: Le fichier a {len(df.columns)} colonnes")
+                    st.info(f"🔍 Debug: Colonnes A={df.columns[0]}, B={df.columns[1]}, C={df.columns[2]}, F={df.columns[5]}")
                     
-                    st.download_button(
-                        label="📥 Télécharger en CSV",
-                        data=csv_data,
-                        file_name=f"transforme_{uploaded_file.name.replace('.xlsx', '.csv').replace('.xls', '.csv')}",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    # Téléchargement Excel
-                    excel_buffer = io.BytesIO()
-                    df_transformed.to_excel(excel_buffer, index=False, header=False, engine='openpyxl')
-                    excel_data = excel_buffer.getvalue()
+                    df_transformed = fill_empty_columns(df)
                     
-                    st.download_button(
-                        label="📥 Télécharger en Excel",
-                        data=excel_data,
-                        file_name=f"transforme_{uploaded_file.name.replace('.csv', '.xlsx')}",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
+                    # Afficher le résultat
+                    st.subheader("✅ Fichier transformé")
+                    st.dataframe(df_transformed, use_container_width=True)
+                    
+                    # Compter les modifications
+                    col_names = df.columns.tolist()
+                    if len(col_names) >= 6:
+                        col_a = col_names[0]
+                        col_f = col_names[5]
+                        empty_after = sum((pd.isna(df_transformed[col_a]) | (df_transformed[col_a] == '')) & 
+                                        (pd.isna(df_transformed[col_f]) | (df_transformed[col_f] == '')))
+                        st.success(f"🎉 Transformation terminée ! {empty_count - empty_after} lignes ont été remplies.")
+                    
+                    # Boutons de téléchargement
+                    st.subheader("💾 Télécharger le résultat")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Téléchargement CSV
+                        csv_buffer = io.StringIO()
+                        df_transformed.to_csv(csv_buffer, index=False, header=False, sep=';')
+                        csv_data = csv_buffer.getvalue()
+                        
+                        st.download_button(
+                            label="📥 Télécharger en CSV",
+                            data=csv_data,
+                            file_name=f"transforme_{uploaded_file.name.replace('.xlsx', '.csv').replace('.xls', '.csv')}",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    
+                    with col2:
+                        # Téléchargement Excel
+                        excel_buffer = io.BytesIO()
+                        df_transformed.to_excel(excel_buffer, index=False, header=False, engine='openpyxl')
+                        excel_data = excel_buffer.getvalue()
+                        
+                        st.download_button(
+                            label="📥 Télécharger en Excel",
+                            data=excel_data,
+                            file_name=f"transforme_{uploaded_file.name.replace('.csv', '.xlsx')}",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
     
-    except Exception as e:
-        st.error(f"❌ Erreur lors du traitement du fichier : {str(e)}")
-        st.exception(e)
+        except Exception as e:
+            st.error(f"❌ Erreur lors du traitement du fichier : {str(e)}")
+            st.exception(e)
 
-else:
-    # Instructions
-    st.info("""
-    👆 **Instructions :**
-    1. Glissez-déposez votre fichier CSV ou Excel ci-dessus
-    2. Visualisez le fichier original
-    3. Cliquez sur "Transformer le fichier"
-    4. Téléchargez le résultat transformé
+    else:
+        # Instructions
+        st.info("""
+        👆 **Instructions :**
+        1. Glissez-déposez votre fichier CSV ou Excel ci-dessus
+        2. Visualisez le fichier original
+        3. Cliquez sur "Transformer le fichier"
+        4. Téléchargez le résultat transformé
+        
+        **Logique de transformation :**
+        - Les colonnes A et F vides sont automatiquement remplies
+        - Si une ligne a les mêmes valeurs dans les colonnes B et C qu'une autre ligne,
+          les valeurs A et F de cette autre ligne sont copiées dans la ligne vide
+        """)
+
+# ===== ONGLET 2 : GESTION DES CORRESPONDANCES =====
+with tab2:
+    st.subheader("🗂️ Gestion des correspondances")
     
-    **Logique de transformation :**
-    - Les colonnes A et F vides sont automatiquement remplies
-    - Si une ligne a les mêmes valeurs dans les colonnes B et C qu'une autre ligne,
-      les valeurs A et F de cette autre ligne sont copiées dans la ligne vide
-    """)
+    # Initialiser la base de données
+    init_database()
+    
+    # Section d'import Excel/CSV
+    st.markdown("### 📤 Importer des correspondances")
+    with st.expander("➕ Importer depuis un fichier Excel ou CSV", expanded=False):
+        uploaded_file = st.file_uploader(
+            "Glissez-déposez votre fichier Excel ou CSV de correspondances",
+            type=['xlsx', 'xls', 'csv'],
+            help="Format attendu : Dénomination | Forme de panneau | Couleur int | Couleur ext | Epaisseur mm"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Lire le fichier selon son type
+                if uploaded_file.name.endswith('.csv'):
+                    # Essayer différents encodages et séparateurs pour CSV
+                    encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+                    df_import = None
+                    for encoding in encodings:
+                        try:
+                            uploaded_file.seek(0)
+                            df_import = pd.read_csv(uploaded_file, encoding=encoding, sep=';')
+                            st.info(f"✅ Fichier CSV lu avec l'encodage : {encoding}")
+                            break
+                        except:
+                            try:
+                                uploaded_file.seek(0)
+                                df_import = pd.read_csv(uploaded_file, encoding=encoding, sep=',')
+                                st.info(f"✅ Fichier CSV lu avec l'encodage : {encoding}")
+                                break
+                            except:
+                                continue
+                    
+                    if df_import is None:
+                        st.error("❌ Impossible de lire le fichier CSV")
+                        st.stop()
+                else:
+                    # Lire le fichier Excel
+                    df_import = pd.read_excel(uploaded_file)
+                
+                # Vérifier le nombre de colonnes
+                if len(df_import.columns) < 5:
+                    st.error("❌ Le fichier doit contenir au moins 5 colonnes")
+                else:
+                    st.success(f"✅ Fichier chargé : {len(df_import)} lignes détectées")
+                    
+                    # Afficher un aperçu
+                    st.markdown("**Aperçu des données :**")
+                    st.dataframe(df_import.head(10), use_container_width=True)
+                    
+                    if st.button("📥 Importer les données", type="primary", use_container_width=True):
+                        progress_bar = st.progress(0)
+                        imported_count = 0
+                        error_count = 0
+                        
+                        # Insérer chaque ligne
+                        for idx, row in df_import.iterrows():
+                            try:
+                                # Extraire les 5 colonnes
+                                denomination = str(row.iloc[0]) if pd.notna(row.iloc[0]) else ""
+                                forme_panneau = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
+                                couleur_int = str(row.iloc[2]) if pd.notna(row.iloc[2]) else ""
+                                couleur_ext = str(row.iloc[3]) if pd.notna(row.iloc[3]) else ""
+                                epaisseur_mm = row.iloc[4] if pd.notna(row.iloc[4]) else 0.0
+                                
+                                # Convertir epaisseur_mm en float si ce n'est pas déjà le cas
+                                try:
+                                    epaisseur_mm = float(epaisseur_mm)
+                                except:
+                                    epaisseur_mm = 0.0
+                                
+                                # Ajouter uniquement si la dénomination n'est pas vide
+                                if denomination and denomination != "nan" and denomination.strip():
+                                    add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+                                    imported_count += 1
+                            except Exception as e:
+                                error_count += 1
+                                st.warning(f"Erreur ligne {idx + 2}: {str(e)}")
+                            
+                            # Mettre à jour la barre de progression
+                            progress_bar.progress((idx + 1) / len(df_import))
+                        
+                        # Afficher les résultats
+                        if imported_count > 0:
+                            st.success(f"✅ {imported_count} correspondances importées avec succès !")
+                        if error_count > 0:
+                            st.warning(f"⚠️ {error_count} erreurs rencontrées")
+                        
+                        st.rerun()
+            
+            except Exception as e:
+                st.error(f"❌ Erreur lors de l'import : {str(e)}")
+                st.exception(e)
+    
+    st.markdown("---")
+    
+    # Afficher les correspondances existantes
+    st.markdown("### 📋 Liste des correspondances")
+    df_correspondances = get_all_correspondances()
+    
+    if len(df_correspondances) > 0:
+        st.dataframe(df_correspondances, use_container_width=True, height=300)
+    else:
+        st.info("Aucune correspondance enregistrée pour le moment.")
+    
+    st.markdown("---")
+    
+    # Formulaire d'ajout/édition
+    st.markdown("### ✏️ Ajouter / Modifier une correspondance")
+    
+    # Récupérer les IDs pour le sélecteur d'édition
+    if len(df_correspondances) > 0:
+        correspondance_ids = df_correspondances['id'].tolist()
+        edit_id = st.selectbox("Modifier une correspondance existante (ou 'Nouvelle' pour ajouter)", 
+                               ["Nouvelle"] + [f"ID: {id}" for id in correspondance_ids])
+        
+        if edit_id.startswith("ID:"):
+            # Mode édition
+            id_to_edit = int(edit_id.split(":")[1])
+            row = df_correspondances[df_correspondances['id'] == id_to_edit].iloc[0]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                denomination = st.text_input("Dénomination", value=row['denomination'])
+                forme_panneau = st.text_input("Forme de panneau", value=row['forme_panneau'])
+                couleur_int = st.text_input("Couleur int", value=row['couleur_int'])
+            with col2:
+                couleur_ext = st.text_input("Couleur ext", value=row['couleur_ext'])
+                epaisseur_mm = st.number_input("Epaisseur (mm)", value=float(row['epaisseur_mm']) if pd.notna(row['epaisseur_mm']) else 0.0)
+            
+            col_update, col_delete = st.columns(2)
+            with col_update:
+                if st.button("💾 Mettre à jour", type="primary", use_container_width=True):
+                    update_correspondance(id_to_edit, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+                    st.success("✅ Correspondance mise à jour !")
+                    st.rerun()
+            
+            with col_delete:
+                if st.button("🗑️ Supprimer", use_container_width=True):
+                    delete_correspondance(id_to_edit)
+                    st.success("✅ Correspondance supprimée !")
+                    st.rerun()
+        else:
+            # Mode ajout
+            col1, col2 = st.columns(2)
+            with col1:
+                denomination = st.text_input("Dénomination *")
+                forme_panneau = st.text_input("Forme de panneau *")
+                couleur_int = st.text_input("Couleur int *")
+            with col2:
+                couleur_ext = st.text_input("Couleur ext *")
+                epaisseur_mm = st.number_input("Epaisseur (mm) *", value=0.0)
+            
+            if st.button("➕ Ajouter", type="primary", use_container_width=True):
+                if denomination and forme_panneau and couleur_int and couleur_ext:
+                    add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+                    st.success("✅ Correspondance ajoutée !")
+                    st.rerun()
+                else:
+                    st.error("❌ Veuillez remplir tous les champs obligatoires")
+    else:
+        # Mode ajout initial
+        col1, col2 = st.columns(2)
+        with col1:
+            denomination = st.text_input("Dénomination *")
+            forme_panneau = st.text_input("Forme de panneau *")
+            couleur_int = st.text_input("Couleur int *")
+        with col2:
+            couleur_ext = st.text_input("Couleur ext *")
+            epaisseur_mm = st.number_input("Epaisseur (mm) *", value=0.0)
+        
+        if st.button("➕ Ajouter", type="primary", use_container_width=True):
+            if denomination and forme_panneau and couleur_int and couleur_ext:
+                add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+                st.success("✅ Correspondance ajoutée !")
+                st.rerun()
+            else:
+                st.error("❌ Veuillez remplir tous les champs obligatoires")
 
 # Footer
 st.markdown("---")
@@ -217,4 +472,3 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-

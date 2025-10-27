@@ -1,0 +1,3 @@
+# Ce dossier contiendra la base de données DuckDB persistante
+# Le fichier correspondances.duckdb sera créé automatiquement au premier démarrage
+
