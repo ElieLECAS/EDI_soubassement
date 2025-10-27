@@ -52,14 +52,30 @@ def get_all_correspondances():
     return df
 
 def add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
-    """Ajoute une nouvelle correspondance à la base de données"""
+    """Ajoute une nouvelle correspondance à la base de données si elle n'existe pas déjà"""
     conn = init_database()
-    # L'ID est automatiquement généré grâce à la séquence
-    conn.execute("""
-        INSERT INTO correspondances (denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
-        VALUES (?, ?, ?, ?, ?)
-    """, [denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm])
-    st.cache_resource.clear()
+    
+    # Vérifier si une ligne avec exactement les mêmes valeurs existe déjà
+    result = conn.execute("""
+        SELECT COUNT(*) 
+        FROM correspondances 
+        WHERE denomination = ? 
+          AND forme_panneau = ? 
+          AND couleur_int = ? 
+          AND couleur_ext = ? 
+          AND epaisseur_mm = ?
+    """, [denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm]).fetchone()
+    
+    # Si aucune correspondance exacte n'existe, on insère
+    if result[0] == 0:
+        conn.execute("""
+            INSERT INTO correspondances (denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+            VALUES (?, ?, ?, ?, ?)
+        """, [denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm])
+        st.cache_resource.clear()
+        return True  # Indique qu'une nouvelle correspondance a été ajoutée
+    else:
+        return False  # Indique qu'une doublon existe déjà
 
 def update_correspondance(id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
     """Met à jour une correspondance existante"""
@@ -523,6 +539,7 @@ with tab2:
                     if st.button("📥 Importer les données", type="primary", use_container_width=True):
                         progress_bar = st.progress(0)
                         imported_count = 0
+                        duplicate_count = 0
                         error_count = 0
                         
                         # Insérer chaque ligne
@@ -543,8 +560,10 @@ with tab2:
                                 
                                 # Ajouter uniquement si la dénomination n'est pas vide
                                 if denomination and denomination != "nan" and denomination.strip():
-                                    add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
-                                    imported_count += 1
+                                    if add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
+                                        imported_count += 1
+                                    else:
+                                        duplicate_count += 1
                             except Exception as e:
                                 error_count += 1
                                 st.warning(f"Erreur ligne {idx + 2}: {str(e)}")
@@ -555,6 +574,8 @@ with tab2:
                         # Afficher les résultats
                         if imported_count > 0:
                             st.success(f"✅ {imported_count} correspondances importées avec succès !")
+                        if duplicate_count > 0:
+                            st.info(f"ℹ️ {duplicate_count} correspondances déjà existantes (doublons ignorés)")
                         if error_count > 0:
                             st.warning(f"⚠️ {error_count} erreurs rencontrées")
                         
@@ -625,8 +646,10 @@ with tab2:
             
             if st.button("➕ Ajouter", type="primary", use_container_width=True):
                 if denomination and forme_panneau and couleur_int and couleur_ext:
-                    add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
-                    st.success("✅ Correspondance ajoutée !")
+                    if add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
+                        st.success("✅ Correspondance ajoutée !")
+                    else:
+                        st.warning("⚠️ Cette correspondance existe déjà dans la base de données.")
                     st.rerun()
                 else:
                     st.error("❌ Veuillez remplir tous les champs obligatoires")
@@ -643,8 +666,10 @@ with tab2:
         
         if st.button("➕ Ajouter", type="primary", use_container_width=True):
             if denomination and forme_panneau and couleur_int and couleur_ext:
-                add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
-                st.success("✅ Correspondance ajoutée !")
+                if add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
+                    st.success("✅ Correspondance ajoutée !")
+                else:
+                    st.warning("⚠️ Cette correspondance existe déjà dans la base de données.")
                 st.rerun()
             else:
                 st.error("❌ Veuillez remplir tous les champs obligatoires")
