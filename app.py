@@ -151,6 +151,46 @@ def delete_correspondance(id: int):
     conn.execute("DELETE FROM correspondances WHERE id = ?", [id])
     st.cache_resource.clear()
 
+def get_correspondance_by_id(id: int) -> Optional[pd.Series]:
+    """Récupère une correspondance par son ID"""
+    conn = init_database()
+    df = conn.execute("""
+        SELECT id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm 
+        FROM correspondances 
+        WHERE id = ?
+    """, [id]).df()
+    
+    if len(df) > 0:
+        return df.iloc[0]
+    return None
+
+def search_correspondances(search_term: str) -> pd.DataFrame:
+    """Recherche des correspondances"""
+    conn = init_database()
+    search_pattern = f"%{search_term}%"
+    return conn.execute("""
+        SELECT id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm 
+        FROM correspondances 
+        WHERE denomination LIKE ? OR forme_panneau LIKE ? OR couleur_int LIKE ? OR couleur_ext LIKE ?
+        ORDER BY id
+    """, [search_pattern, search_pattern, search_pattern, search_pattern]).df()
+
+def export_correspondances_to_excel() -> io.BytesIO:
+    """Exporte les correspondances vers Excel"""
+    df = get_all_correspondances()
+    buffer = io.BytesIO()
+    df.to_excel(buffer, index=False, engine='openpyxl')
+    buffer.seek(0)
+    return buffer
+
+def export_correspondances_to_csv() -> io.StringIO:
+    """Exporte les correspondances vers CSV"""
+    df = get_all_correspondances()
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False, sep=';')
+    buffer.seek(0)
+    return buffer
+
 # ==============================================================================
 # LECTURE DES FICHIERS
 # ==============================================================================
@@ -438,44 +478,27 @@ def render_transformation_tab():
     uploaded_file = st.file_uploader(
         "Glissez-déposez votre fichier CSV ou Excel ici",
         type=['csv', 'xlsx', 'xls'],
-        help="Formats acceptés : CSV, Excel (.xlsx, .xls)"
+        help="Formats acceptés : CSV, Excel (.xlsx, .xls). Le traitement démarre automatiquement."
     )
     
     if uploaded_file is not None:
         try:
-            df = read_file(uploaded_file)
-            df = prepare_dataframe(df)
+            with st.spinner("📥 Lecture et préparation du fichier..."):
+                df = read_file(uploaded_file)
+                df = prepare_dataframe(df)
             
-            # Afficher le fichier original
-            st.subheader("📄 Fichier original")
-            st.dataframe(df, use_container_width=True)
+            # Transformation automatique
+            with st.spinner("🔄 Transformation en cours..."):
+                df_transformed = transform_file(df)
             
-            # Statistiques
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Nombre de lignes", len(df))
-            with col2:
-                st.metric("Nombre de colonnes", len(df.columns))
-            with col3:
-                col_a = df.columns[0]
-                col_f = df.columns[9] if len(df.columns) > 9 else df.columns[4]
-                empty_count = sum((pd.isna(df[col_a]) | (df[col_a] == '')) & 
-                                (pd.isna(df[col_f]) | (df[col_f] == '')))
-                st.metric("Lignes avec A et F vides", empty_count)
+            # Afficher uniquement le fichier transformé
+            st.subheader("✅ Fichier transformé")
+            st.dataframe(df_transformed, use_container_width=True)
             
+            # Téléchargement
             st.markdown("---")
-            
-            # Transformation
-            if st.button("🔄 Transformer le fichier", type="primary", use_container_width=True):
-                with st.spinner("Transformation en cours..."):
-                    df_transformed = transform_file(df)
-                    
-                    st.subheader("✅ Fichier transformé")
-                    st.dataframe(df_transformed, use_container_width=True)
-                    
-                    # Téléchargement
-                    st.subheader("💾 Télécharger le résultat")
-                    _render_download_buttons(df_transformed, uploaded_file.name)
+            st.subheader("💾 Télécharger le résultat")
+            _render_download_buttons(df_transformed, uploaded_file.name)
         
         except Exception as e:
             st.error(f"❌ Erreur lors du traitement du fichier : {str(e)}")
@@ -488,13 +511,16 @@ def _render_download_buttons(df: pd.DataFrame, original_filename: str):
     col1, col2 = st.columns(2)
     
     with col1:
+        # Préparer le CSV selon les spécifications
+        df_csv = prepare_csv_for_export(df.copy())
         csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False, header=False, sep=';')
+        # Utiliser UTF-8-SIG pour Excel et UTF-8 pour compatibilité
+        df_csv.to_csv(csv_buffer, index=False, sep=';', encoding='utf-8-sig')
         st.download_button(
             label="📥 Télécharger en CSV",
-            data=csv_buffer.getvalue(),
+            data=csv_buffer.getvalue().encode('utf-8-sig'),
             file_name=f"transforme_{original_filename.replace('.xlsx', '.csv').replace('.xls', '.csv')}",
-            mime="text/csv",
+            mime="text/csv; charset=utf-8",
             use_container_width=True
         )
     
@@ -509,22 +535,48 @@ def _render_download_buttons(df: pd.DataFrame, original_filename: str):
             use_container_width=True
         )
 
+def prepare_csv_for_export(df: pd.DataFrame) -> pd.DataFrame:
+    """Prépare le dataframe pour l'export CSV avec les modifications spécifiées"""
+    df_result = df.copy()
+    
+    # 1. Renommer Date en Jour de livraison souhaitée
+    if 'Date' in df_result.columns:
+        df_result = df_result.rename(columns={'Date': 'Jour de livraison souhaitée'})
+    
+    # 2. Supprimer la colonne Denomination
+    if 'Denomination' in df_result.columns:
+        df_result = df_result.drop(columns=['Denomination'])
+    
+    # 3. Supprimer Reference_Dupliquee
+    if 'Reference_Dupliquee' in df_result.columns:
+        df_result = df_result.drop(columns=['Reference_Dupliquee'])
+    
+    # 4. Supprimer les 3 colonnes Secteur
+    for col in df_result.columns:
+        if 'Secteur' in col:
+            df_result = df_result.drop(columns=[col])
+    
+    # 5. Déplacer epaisseur_mm à gauche de Largeur si les deux colonnes existent
+    if 'epaisseur_mm' in df_result.columns and 'Largeur' in df_result.columns:
+        # Obtenir l'index de Largeur
+        largeur_idx = df_result.columns.get_loc('Largeur')
+        
+        # Supprimer epaisseur_mm
+        epaisseur = df_result.pop('epaisseur_mm')
+        
+        # Insérer epaisseur_mm avant Largeur
+        df_result.insert(largeur_idx, 'epaisseur_mm', epaisseur)
+    
+    return df_result
+
 def _render_instructions():
     """Affiche les instructions"""
     st.info("""
     👆 **Instructions :**
     1. Glissez-déposez votre fichier CSV ou Excel ci-dessus
-    2. Visualisez le fichier original
-    3. Cliquez sur "Transformer le fichier"
-    4. Téléchargez le résultat transformé
-    
-    **Logique de transformation :**
-    - La colonne Reference est éclatée en deux colonnes (séparation au point)
-      Exemple: "123.456" devient "N de cde": "123" et "Extension": "456"
-    - Ajout de 3 colonnes de secteurs basées sur l'Extension
-    - Les colonnes A et F vides sont automatiquement remplies
-    - Merge avec la table de correspondances
-    - Ajout d'une colonne de référence en première position
+    2. Le traitement démarre automatiquement
+    3. Visualisez le fichier transformé
+    4. Téléchargez le résultat
     """)
 
 # ==============================================================================
@@ -536,26 +588,33 @@ def render_correspondences_tab():
     st.subheader("🗂️ Gestion des correspondances")
     init_database()
     
-    # Import
-    with st.expander("➕ Importer depuis un fichier Excel ou CSV", expanded=False):
-        _render_import_section()
+    # Onglets pour les différentes actions
+    action_tab1, action_tab2, action_tab3, action_tab4 = st.tabs([
+        "📋 Liste", 
+        "➕ Ajouter", 
+        "✏️ Modifier", 
+        "🗑️ Supprimer"
+    ])
     
-    st.markdown("---")
-    
-    # Liste
-    st.markdown("### 📋 Liste des correspondances")
     df_correspondances = get_all_correspondances()
     
-    if len(df_correspondances) > 0:
-        st.dataframe(df_correspondances, use_container_width=True, height=300)
-    else:
-        st.info("Aucune correspondance enregistrée pour le moment.")
+    with action_tab1:
+        _render_list_tab(df_correspondances)
+    
+    with action_tab2:
+        _render_add_tab()
+    
+    with action_tab3:
+        _render_edit_tab(df_correspondances)
+    
+    with action_tab4:
+        _render_delete_tab(df_correspondances)
     
     st.markdown("---")
     
-    # Formulaire
-    st.markdown("### ✏️ Ajouter / Modifier une correspondance")
-    _render_form(df_correspondances)
+    # Import en bas de page
+    with st.expander("📥 Importer depuis un fichier Excel ou CSV", expanded=False):
+        _render_import_section()
 
 def _render_import_section():
     """Section d'import"""
@@ -622,70 +681,202 @@ def _import_correspondences(df: pd.DataFrame):
     
     st.rerun()
 
-def _render_form(df_correspondances: pd.DataFrame):
-    """Formulaire d'ajout/édition"""
+def _render_list_tab(df_correspondances: pd.DataFrame):
+    """Onglet d'affichage de la liste"""
+    st.markdown("### 📋 Liste des correspondances")
+    
     if len(df_correspondances) > 0:
-        ids = df_correspondances['id'].tolist()
-        edit_id = st.selectbox(
-            "Modifier une correspondance existante (ou 'Nouvelle' pour ajouter)",
-            ["Nouvelle"] + [f"ID: {id}" for id in ids]
-        )
+        # Barre de recherche
+        col_search, col_action = st.columns([3, 1])
+        with col_search:
+            search_term = st.text_input("🔍 Rechercher", placeholder="Rechercher dans les correspondances...")
+        with col_action:
+            st.write("")  # Alignement vertical
+            if st.button("Effacer", use_container_width=True):
+                st.rerun()
         
-        if edit_id.startswith("ID:"):
-            _render_edit_form(df_correspondances, int(edit_id.split(":")[1]))
+        # Filtrer les résultats
+        if search_term:
+            filtered_df = df_correspondances[
+                df_correspondances['denomination'].str.contains(search_term, case=False, na=False) |
+                df_correspondances['forme_panneau'].str.contains(search_term, case=False, na=False) |
+                df_correspondances['couleur_int'].str.contains(search_term, case=False, na=False) |
+                df_correspondances['couleur_ext'].str.contains(search_term, case=False, na=False)
+            ]
+            display_df = filtered_df
         else:
-            _render_add_form()
+            display_df = df_correspondances
+        
+        st.markdown("---")
+        
+        if len(display_df) > 0:
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                height=400,
+                hide_index=True
+            )
+            
+            st.markdown("---")
+            
+            # Boutons d'export
+            st.markdown("#### 💾 Exporter les correspondances")
+            col_export1, col_export2 = st.columns(2)
+            with col_export1:
+                excel_buffer = export_correspondances_to_excel()
+                st.download_button(
+                    label="📥 Exporter en Excel",
+                    data=excel_buffer,
+                    file_name="correspondances.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with col_export2:
+                csv_buffer = export_correspondances_to_csv()
+                st.download_button(
+                    label="📥 Exporter en CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name="correspondances.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
+            st.markdown("---")
+            
+            # Statistiques
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total correspondances", len(df_correspondances))
+            with col2:
+                st.metric("Correspondances affichées", len(display_df))
+            with col3:
+                if search_term:
+                    st.metric("Résultats trouvés", len(display_df))
+                else:
+                    unique_denominations = df_correspondances['denomination'].nunique()
+                    st.metric("Dénominations uniques", unique_denominations)
+        else:
+            st.warning("⚠️ Aucun résultat trouvé pour votre recherche")
     else:
-        _render_add_form()
+        st.info("ℹ️ Aucune correspondance enregistrée pour le moment.")
 
-def _render_edit_form(df: pd.DataFrame, id: int):
-    """Formulaire d'édition"""
-    row = df[df['id'] == id].iloc[0]
+def _render_add_tab():
+    """Onglet d'ajout"""
+    st.markdown("### ➕ Ajouter une nouvelle correspondance")
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     with col1:
-        denomination = st.text_input("Dénomination", value=row['denomination'])
-        forme_panneau = st.text_input("Forme de panneau", value=row['forme_panneau'])
-        couleur_int = st.text_input("Couleur int", value=row['couleur_int'])
+        denomination = st.text_input("Dénomination *", help="Ex: Alu blanc")
+        forme_panneau = st.text_input("Forme de panneau *", help="Ex: Plat")
+        couleur_int = st.text_input("Couleur int *", help="Ex: Blanc")
     with col2:
-        couleur_ext = st.text_input("Couleur ext", value=row['couleur_ext'])
-        epaisseur_mm = st.number_input(
-            "Epaisseur (mm)",
-            value=float(row['epaisseur_mm']) if pd.notna(row['epaisseur_mm']) else 0.0
-        )
+        couleur_ext = st.text_input("Couleur ext *", help="Ex: Gris")
+        epaisseur_mm = st.number_input("Epaisseur (mm) *", value=0.0, min_value=0.0, step=0.1, help="Epaisseur en millimètres")
     
-    col_update, col_delete = st.columns(2)
-    with col_update:
-        if st.button("💾 Mettre à jour", type="primary", use_container_width=True):
-            update_correspondance(id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
-            st.success("✅ Correspondance mise à jour !")
-            st.rerun()
-    with col_delete:
-        if st.button("🗑️ Supprimer", use_container_width=True):
-            delete_correspondance(id)
-            st.success("✅ Correspondance supprimée !")
-            st.rerun()
-
-def _render_add_form():
-    """Formulaire d'ajout"""
-    col1, col2 = st.columns(2)
-    with col1:
-        denomination = st.text_input("Dénomination *")
-        forme_panneau = st.text_input("Forme de panneau *")
-        couleur_int = st.text_input("Couleur int *")
-    with col2:
-        couleur_ext = st.text_input("Couleur ext *")
-        epaisseur_mm = st.number_input("Epaisseur (mm) *", value=0.0)
+    st.markdown("---")
     
-    if st.button("➕ Ajouter", type="primary", use_container_width=True):
+    if st.button("➕ Ajouter la correspondance", type="primary", use_container_width=True):
         if denomination and forme_panneau and couleur_int and couleur_ext:
             if add_correspondance(denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm):
-                st.success("✅ Correspondance ajoutée !")
+                st.success("✅ Correspondance ajoutée avec succès !")
+                st.rerun()
             else:
-                st.warning("⚠️ Cette correspondance existe déjà")
-            st.rerun()
+                st.warning("⚠️ Cette correspondance existe déjà dans la base de données")
         else:
             st.error("❌ Veuillez remplir tous les champs obligatoires")
+
+def _render_edit_tab(df_correspondances: pd.DataFrame):
+    """Onglet de modification"""
+    st.markdown("### ✏️ Modifier une correspondance existante")
+    st.markdown("---")
+    
+    if len(df_correspondances) == 0:
+        st.info("ℹ️ Aucune correspondance à modifier pour le moment.")
+        return
+    
+    # Sélection de la correspondance à modifier
+    df_display = df_correspondances.copy()
+    df_display['affichage'] = df_display['id'].astype(str) + " - " + df_display['denomination']
+    
+    selected_display = st.selectbox(
+        "Sélectionner la correspondance à modifier",
+        options=df_display['affichage'].tolist()
+    )
+    
+    selected_id = int(selected_display.split(" - ")[0])
+    row = df_correspondances[df_correspondances['id'] == selected_id].iloc[0]
+    
+    st.markdown("---")
+    st.markdown("#### Informations actuelles")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        denomination = st.text_input("Dénomination", value=row['denomination'], key="edit_denomination")
+        forme_panneau = st.text_input("Forme de panneau", value=row['forme_panneau'], key="edit_forme")
+        couleur_int = st.text_input("Couleur int", value=row['couleur_int'], key="edit_couleur_int")
+    with col2:
+        couleur_ext = st.text_input("Couleur ext", value=row['couleur_ext'], key="edit_couleur_ext")
+        epaisseur_mm = st.number_input(
+            "Epaisseur (mm)",
+            value=float(row['epaisseur_mm']) if pd.notna(row['epaisseur_mm']) else 0.0,
+            min_value=0.0,
+            step=0.1,
+            key="edit_epaisseur"
+        )
+    
+    st.markdown("---")
+    
+    if st.button("💾 Mettre à jour la correspondance", type="primary", use_container_width=True):
+        update_correspondance(selected_id, denomination, forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+        st.success("✅ Correspondance mise à jour avec succès !")
+        st.rerun()
+
+def _render_delete_tab(df_correspondances: pd.DataFrame):
+    """Onglet de suppression"""
+    st.markdown("### 🗑️ Supprimer une correspondance")
+    st.markdown("---")
+    
+    if len(df_correspondances) == 0:
+        st.info("ℹ️ Aucune correspondance à supprimer pour le moment.")
+        return
+    
+    # Sélection de la correspondance à supprimer
+    df_display = df_correspondances.copy()
+    df_display['affichage'] = (
+        df_display['id'].astype(str) + " - " + 
+        df_display['denomination'] + " (" + 
+        df_display['forme_panneau'].fillna('N/A').astype(str) + ")"
+    )
+    
+    selected_display = st.selectbox(
+        "Sélectionner la correspondance à supprimer",
+        options=df_display['affichage'].tolist()
+    )
+    
+    selected_id = int(selected_display.split(" - ")[0])
+    row = df_correspondances[df_correspondances['id'] == selected_id].iloc[0]
+    
+    st.markdown("---")
+    st.markdown("#### 📋 Informations de la correspondance")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info(f"**Dénomination:** {row['denomination']}")
+        st.info(f"**Forme de panneau:** {row['forme_panneau']}")
+        st.info(f"**Couleur int:** {row['couleur_int']}")
+    with col2:
+        st.info(f"**Couleur ext:** {row['couleur_ext']}")
+        st.info(f"**Epaisseur (mm):** {row['epaisseur_mm']}")
+    
+    st.markdown("---")
+    
+    st.warning("⚠️ Cette action est irréversible. Êtes-vous sûr de vouloir supprimer cette correspondance ?")
+    
+    if st.button("🗑️ Supprimer définitivement", type="primary", use_container_width=True):
+        delete_correspondance(selected_id)
+        st.success("✅ Correspondance supprimée avec succès !")
+        st.rerun()
 
 # ==============================================================================
 # APPLICATION PRINCIPALE
