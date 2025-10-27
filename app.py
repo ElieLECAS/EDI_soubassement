@@ -86,27 +86,23 @@ def fill_empty_columns(df):
     # Créer une copie du dataframe
     df_result = df.copy()
     
-    # Vérifier qu'il y a au moins 10 colonnes (après split et ajout des secteurs)
-    if len(df.columns) < 10:
-        st.warning("Le fichier transformé doit avoir au moins 10 colonnes")
+    # Vérifier qu'il y a au moins 6 colonnes (minimum nécessaire)
+    if len(df.columns) < 6:
+        st.warning("Le fichier doit avoir au moins 6 colonnes")
         return df_result
     
     # Obtenir les noms des colonnes 
-    # Après split_column_1 et add_sector_columns: 
-    # - index 0=A, 
-    # - index 1=B partie gauche,
-    # - index 2=Extension (partie droite de B),
-    # - index 3=Secteur PE (nouveau),
-    # - index 4=Secteur ALU (nouveau),
-    # - index 5=Secteur TEX (nouveau),
-    # - index 6=C (anciennement 2, décalé de 3 positions),
-    # - index 9=F (anciennement 5, décalé de 3 positions)
     col_names = df.columns.tolist()
     col_a = col_names[0]  # Colonne A
-    # Les colonnes B et C pour la correspondance sont maintenant aux index 1 et 6
-    col_b = col_names[1]  # Colonne B (index 1 après split)
-    col_c = col_names[6] if len(col_names) > 6 else col_names[3]  # Colonne C (index 6 après secteurs)
-    col_f = col_names[9] if len(col_names) > 9 else col_names[6]  # Colonne F (index 9 après secteurs)
+    
+    # Déterminer les colonnes B, C et F
+    # Structure attendue après split et secteurs:
+    # index 0=A, 1=B, 2=Extension, 3-5=Secteurs, 6=C, 7=D, 8=E, 9=F
+    col_b = col_names[1] if len(col_names) > 1 else col_a  # Colonne B
+    # Colonne C est après les secteurs (index 6)
+    col_c = col_names[6] if len(col_names) > 6 else (col_names[3] if len(col_names) > 3 else col_names[2])
+    # Colonne F est à l'index 9 si disponible, sinon à la fin
+    col_f = col_names[9] if len(col_names) > 9 else (col_names[6] if len(col_names) > 6 else col_names[5])
     
     # Parcourir chaque ligne
     for idx in df_result.index:
@@ -189,6 +185,55 @@ def split_column_1(df):
     df_result.insert(2, 'col_1_partie_droite', right_values)
     
     return df_result
+
+def merge_with_correspondances(df):
+    """
+    Effectue un merge (left join) avec la table de correspondances basé sur la dénomination.
+    La colonne de dénomination dans le fichier transformé est à l'index 9 (colonne F originale).
+    """
+    df_result = df.copy()
+    
+    # Vérifier qu'il y a au moins 10 colonnes
+    if len(df.columns) < 10:
+        st.warning("⚠️ Le fichier doit avoir au moins 10 colonnes pour le merge")
+        return df_result
+    
+    # Récupérer toutes les correspondances depuis la base de données
+    df_correspondances = get_all_correspondances()
+    
+    if len(df_correspondances) == 0:
+        st.warning("⚠️ Aucune correspondance trouvée dans la base de données. Le merge ne peut pas être effectué.")
+        return df_result
+    
+    # La colonne de dénomination est à l'index 9 (colonne F originale après transformations)
+    col_names = df.columns.tolist()
+    denomination_col = col_names[9]
+    
+    # Faire le merge avec les correspondances
+    df_result = df_result.reset_index(drop=True)
+    df_result['denomination_key'] = df_result[denomination_col].astype(str)
+    
+    # Normaliser les dénominations pour le merge (retirer les espaces en plus)
+    df_result['denomination_key'] = df_result['denomination_key'].str.strip()
+    
+    df_correspondances['denomination_key'] = df_correspondances['denomination'].astype(str).str.strip()
+    
+    # Effectuer le merge (left join)
+    df_merged = pd.merge(
+        df_result, 
+        df_correspondances[['denomination_key', 'forme_panneau', 'couleur_int', 'couleur_ext', 'epaisseur_mm']],
+        on='denomination_key',
+        how='left'
+    )
+    
+    # Compter le nombre de correspondances trouvées
+    matched_count = df_merged['forme_panneau'].notna().sum()
+    st.info(f"📊 {matched_count} correspondances trouvées sur {len(df_merged)} lignes")
+    
+    # Supprimer la colonne temporaire 'denomination_key'
+    df_merged = df_merged.drop(columns=['denomination_key'])
+    
+    return df_merged
 
 def add_sector_columns(df):
     """
@@ -329,14 +374,18 @@ with tab1:
                     # Ensuite remplir les colonnes vides
                     df_transformed = fill_empty_columns(df_transformed)
                     
+                    # Effectuer le merge avec la table de correspondances
+                    df_transformed = merge_with_correspondances(df_transformed)
+                    
                     # Afficher le résultat
                     st.subheader("✅ Fichier transformé")
                     st.dataframe(df_transformed, use_container_width=True)
                     
-                    # Compter les modifications
+                    # Compter les modifications (après merge, le nombre de colonnes a augmenté)
                     col_names = df_transformed.columns.tolist()
                     if len(col_names) >= 10:
                         col_a = col_names[0]
+                        # Après le merge, la colonne F est maintenant à l'index 9
                         col_f = col_names[9] if len(col_names) > 9 else col_names[6]
                         empty_after = sum((pd.isna(df_transformed[col_a]) | (df_transformed[col_a] == '')) & 
                                         (pd.isna(df_transformed[col_f]) | (df_transformed[col_f] == '')))
@@ -348,8 +397,11 @@ with tab1:
                                 original_col_f = original_col_names[5] if len(original_col_names) > 5 else original_col_names[4]
                                 original_empty_count = sum((pd.isna(df[original_col_a]) | (df[original_col_a] == '')) & 
                                                         (pd.isna(df[original_col_f]) | (df[original_col_f] == '')))
-                                st.success(f"🎉 Transformation terminée ! {original_empty_count - empty_after} lignes ont été remplies.")
-                        except:
+                                if original_empty_count > empty_after:
+                                    st.success(f"🎉 Transformation terminée ! {original_empty_count - empty_after} lignes ont été remplies.")
+                                else:
+                                    st.success(f"🎉 Transformation terminée ! {len(df_transformed)} lignes traitées.")
+                        except Exception as e:
                             st.success(f"🎉 Transformation terminée !")
                     
                     # Boutons de téléchargement
@@ -408,6 +460,9 @@ with tab1:
         - Les colonnes A et F vides sont automatiquement remplies
         - Si une ligne a les mêmes valeurs dans les colonnes B et C qu'une autre ligne,
           les valeurs A et F de cette autre ligne sont copiées dans la ligne vide
+        - Merge avec la table de correspondances :
+          * Les informations (forme_panneau, couleur_int, couleur_ext, epaisseur_mm)
+          * sont ajoutées en comparant la dénomination avec celles de la base de données
         """)
 
 # ===== ONGLET 2 : GESTION DES CORRESPONDANCES =====
