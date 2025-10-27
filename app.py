@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import csv
 import duckdb
 import os
 from pathlib import Path
@@ -198,9 +199,18 @@ def export_correspondances_to_csv() -> io.StringIO:
 def read_file(uploaded_file) -> pd.DataFrame:
     """Lit un fichier CSV ou Excel"""
     if uploaded_file.name.endswith('.csv'):
-        return _read_csv_with_multiple_encodings(uploaded_file)
+        df = _read_csv_with_multiple_encodings(uploaded_file)
     else:
-        return pd.read_excel(uploaded_file, header=None)
+        # Lire Excel avec toutes les colonnes en string pour préserver les formats
+        df = pd.read_excel(uploaded_file, header=None, dtype=str)
+        # Convertir les colonnes numériques nécessaires après
+        # (on peut ajouter une logique ici si nécessaire)
+    
+    # Forcer la colonne Reference (colonne index 1) en string pour préserver les zéros non significatifs
+    if len(df.columns) > 1:
+        df.iloc[:, 1] = df.iloc[:, 1].astype(str)
+    
+    return df
 
 def _read_csv_with_multiple_encodings(uploaded_file) -> pd.DataFrame:
     """Lit un CSV en essayant plusieurs encodages"""
@@ -208,7 +218,8 @@ def _read_csv_with_multiple_encodings(uploaded_file) -> pd.DataFrame:
         for sep in [';', ',']:
             try:
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, sep=sep, header=None, encoding=encoding)
+                # Lire toutes les colonnes en string pour préserver les formats
+                df = pd.read_csv(uploaded_file, sep=sep, header=None, encoding=encoding, dtype=str)
                 st.info(f"✅ Fichier lu avec l'encodage : {encoding}, séparateur : {sep}")
                 return df
             except (UnicodeDecodeError, Exception):
@@ -265,6 +276,9 @@ def split_reference_column(df: pd.DataFrame) -> pd.DataFrame:
     df_result = df_result.rename(columns={ref_col: 'N de cde'})
     df_result['N de cde'] = list(left_values)
     df_result.insert(2, 'Extension', list(right_values))
+    
+    # Forcer la colonne Extension en type string pour préserver les zéros non significatifs
+    df_result['Extension'] = df_result['Extension'].astype(str)
     
     return df_result
 
@@ -513,6 +527,11 @@ def _render_download_buttons(df: pd.DataFrame, original_filename: str):
     with col1:
         # Préparer le CSV selon les spécifications
         df_csv = prepare_csv_for_export(df.copy())
+        
+        # Forcer toutes les colonnes en string pour préserver les formats
+        for col in df_csv.columns:
+            df_csv[col] = df_csv[col].astype(str)
+        
         csv_buffer = io.StringIO()
         # Utiliser UTF-8-SIG pour Excel et UTF-8 pour compatibilité
         df_csv.to_csv(csv_buffer, index=False, sep=';', encoding='utf-8-sig')
@@ -525,8 +544,13 @@ def _render_download_buttons(df: pd.DataFrame, original_filename: str):
         )
     
     with col2:
+        # Forcer la colonne Extension en type string pour l'export Excel
+        df_excel = df.copy()
+        if 'Extension' in df_excel.columns:
+            df_excel['Extension'] = df_excel['Extension'].astype(str)
+        
         excel_buffer = io.BytesIO()
-        df.to_excel(excel_buffer, index=False, header=False, engine='openpyxl')
+        df_excel.to_excel(excel_buffer, index=False, header=False, engine='openpyxl')
         st.download_button(
             label="📥 Télécharger en Excel",
             data=excel_buffer.getvalue(),
@@ -566,6 +590,10 @@ def prepare_csv_for_export(df: pd.DataFrame) -> pd.DataFrame:
         
         # Insérer epaisseur_mm avant Largeur
         df_result.insert(largeur_idx, 'epaisseur_mm', epaisseur)
+    
+    # 6. Forcer la colonne Extension en type string pour préserver les zéros non significatifs
+    if 'Extension' in df_result.columns:
+        df_result['Extension'] = df_result['Extension'].astype(str)
     
     return df_result
 
