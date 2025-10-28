@@ -220,7 +220,6 @@ def _read_csv_with_multiple_encodings(uploaded_file) -> pd.DataFrame:
                 uploaded_file.seek(0)
                 # Lire toutes les colonnes en string pour préserver les formats
                 df = pd.read_csv(uploaded_file, sep=sep, header=None, encoding=encoding, dtype=str)
-                st.info(f"✅ Fichier lu avec l'encodage : {encoding}, séparateur : {sep}")
                 return df
             except (UnicodeDecodeError, Exception):
                 continue
@@ -235,7 +234,6 @@ def prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         # Exclure colonne 3 (Libelle_Quantite)
         df = df.iloc[:, [0, 1, 2, 4, 5, 6, 7, 8, 9, 10]]
         df.columns = COLUMN_NAMES
-        st.success("✅ Colonnes renommées avec succès (Libelle_Quantite supprimée)")
     return df
 
 # ==============================================================================
@@ -254,7 +252,6 @@ def clean_height_column(df: pd.DataFrame) -> pd.DataFrame:
             .str.replace('*', '', regex=False)
             .str.strip()
         )
-        st.info("✅ Colonne 'Hauteur' nettoyée")
     
     return df_result
 
