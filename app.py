@@ -467,6 +467,21 @@ def add_concatenated_column(df: pd.DataFrame) -> pd.DataFrame:
 # PIPELINE DE TRANSFORMATION
 # ==============================================================================
 
+def remove_sector_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Supprime les 3 colonnes secteurs après utilisation"""
+    df_result = df.copy()
+    
+    # Supprimer les 3 colonnes Secteur
+    columns_to_remove = []
+    for col in df_result.columns:
+        if 'Secteur' in col:
+            columns_to_remove.append(col)
+    
+    if columns_to_remove:
+        df_result = df_result.drop(columns=columns_to_remove)
+    
+    return df_result
+
 def transform_file(df: pd.DataFrame) -> pd.DataFrame:
     """Pipeline complet de transformation"""
     df = clean_height_column(df)
@@ -475,6 +490,7 @@ def transform_file(df: pd.DataFrame) -> pd.DataFrame:
     df = fill_empty_columns(df)
     df = merge_with_correspondances(df)
     df = add_concatenated_column(df)
+    df = remove_sector_columns(df)
     df = add_laquage_column(df)
     return df
 
