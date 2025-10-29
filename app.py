@@ -385,23 +385,28 @@ def fill_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
     
     return df_result
 
-def merge_with_correspondances(df: pd.DataFrame) -> pd.DataFrame:
-    """Effectue un merge avec la table de correspondances"""
+def merge_with_correspondances(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Effectue un merge avec la table de correspondances
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: DataFrame transformé et DataFrame des lignes sans correspondance
+    """
     df_result = df.copy()
+    df_no_match = pd.DataFrame()
     
     if len(df.columns) < 10:
         st.warning("⚠️ Le fichier doit avoir au moins 10 colonnes pour le merge")
-        return df_result
+        return df_result, df_no_match
     
     df_correspondances = get_all_correspondances()
     
     if len(df_correspondances) == 0:
         st.warning("⚠️ Aucune correspondance trouvée dans la base de données")
-        return df_result
+        return df_result, df_no_match
     
     denomination_col = find_column(df, 'Denomination', fallback_index=9)
     if not denomination_col:
-        return df_result
+        return df_result, df_no_match
     
     df_result = df_result.reset_index(drop=True)
     df_result['denomination_key'] = df_result[denomination_col].astype(str).str.strip()
@@ -417,7 +422,15 @@ def merge_with_correspondances(df: pd.DataFrame) -> pd.DataFrame:
     matched_count = df_merged['forme_panneau'].notna().sum()
     st.info(f"📊 {matched_count} correspondances trouvées sur {len(df_merged)} lignes")
     
-    return df_merged.drop(columns=['denomination_key'])
+    # Identifier les lignes sans correspondance
+    df_no_match = df_merged[df_merged['forme_panneau'].isna()].copy()
+    if len(df_no_match) > 0:
+        # Garder seulement les colonnes originales (sans les colonnes de correspondance ajoutées)
+        original_cols = [col for col in df_no_match.columns 
+                        if col not in ['forme_panneau', 'couleur_int', 'couleur_ext', 'epaisseur_mm', 'denomination_key']]
+        df_no_match = df_no_match[original_cols]
+    
+    return df_merged.drop(columns=['denomination_key']), df_no_match
 
 def add_concatenated_column(df: pd.DataFrame) -> pd.DataFrame:
     """Ajoute la colonne concaténée"""
@@ -494,17 +507,21 @@ def remove_sector_columns(df: pd.DataFrame) -> pd.DataFrame:
     
     return df_result
 
-def transform_file(df: pd.DataFrame) -> pd.DataFrame:
-    """Pipeline complet de transformation"""
+def transform_file(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Pipeline complet de transformation
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: DataFrame transformé et DataFrame des lignes sans correspondance
+    """
     df = clean_height_column(df)
     df = split_reference_column(df)
     df = add_sector_columns(df)
     df = fill_empty_columns(df)
-    df = merge_with_correspondances(df)
+    df, df_no_match = merge_with_correspondances(df)
     df = add_concatenated_column(df)
     df = remove_sector_columns(df)
     df = add_laquage_column(df)
-    return df
+    return df, df_no_match
 
 # ==============================================================================
 # INTERFACE STREAMLIT - TRANSFORMATION
@@ -528,9 +545,39 @@ def render_transformation_tab():
             
             # Transformation automatique
             with st.spinner("🔄 Transformation en cours..."):
-                df_transformed = transform_file(df)
+                df_transformed, df_no_match = transform_file(df)
             
-            # Afficher uniquement le fichier transformé
+            # Afficher les lignes sans correspondance en premier
+            if len(df_no_match) > 0:
+                st.subheader("⚠️ Lignes sans correspondance trouvée")
+                st.error(f"❌ {len(df_no_match)} ligne(s) n'ont pas de correspondance dans la base de données")
+                st.dataframe(df_no_match, use_container_width=True)
+                
+                # Option de télécharger les lignes sans correspondance
+                col1, col2 = st.columns(2)
+                with col1:
+                    csv_buffer_no_match = io.StringIO()
+                    df_no_match.to_csv(csv_buffer_no_match, index=False, sep=';', encoding='utf-8-sig')
+                    st.download_button(
+                        label="📥 Télécharger les lignes sans correspondance (CSV)",
+                        data=csv_buffer_no_match.getvalue().encode('utf-8-sig'),
+                        file_name=f"lignes_sans_correspondance_{uploaded_file.name.replace('.xlsx', '.csv').replace('.xls', '.csv')}",
+                        mime="text/csv; charset=utf-8",
+                        use_container_width=True
+                    )
+                with col2:
+                    excel_buffer_no_match = io.BytesIO()
+                    df_no_match.to_excel(excel_buffer_no_match, index=False, engine='openpyxl')
+                    st.download_button(
+                        label="📥 Télécharger les lignes sans correspondance (Excel)",
+                        data=excel_buffer_no_match.getvalue(),
+                        file_name=f"lignes_sans_correspondance_{uploaded_file.name.replace('.csv', '.xlsx')}",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                st.markdown("---")
+            
+            # Afficher le fichier transformé
             st.subheader("✅ Fichier transformé")
             st.dataframe(df_transformed, use_container_width=True)
             
