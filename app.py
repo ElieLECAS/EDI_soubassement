@@ -21,7 +21,10 @@ st.set_page_config(
 st.title("📊 Transformation de fichiers CSV/Excel")
 
 # Configuration
-DB_PATH = "/app/data/correspondances.duckdb"
+if os.path.exists("/app"):
+    DB_PATH = "/app/data/correspondances.duckdb"
+else:
+    DB_PATH = "data/correspondances.duckdb"
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # Constantes pour la structure des fichiers
