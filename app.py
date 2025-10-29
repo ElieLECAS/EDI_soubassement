@@ -21,11 +21,20 @@ st.set_page_config(
 st.title("📊 Transformation de fichiers CSV/Excel")
 
 # Configuration
-if os.path.exists("/app"):
-    DB_PATH = "/app/data/correspondances.duckdb"
+# Détermine un répertoire de données inscriptible selon l'environnement
+if str(Path.cwd()).startswith("/mount/"):
+    # Environnements Streamlit Cloud (code monté en lecture seule sous /mount/src)
+    # Utiliser /tmp qui est toujours inscriptible
+    DATA_DIR = "/tmp/edi_soubassement"
+elif os.path.exists("/app"):
+    # Environnement Docker/container local avec volume monté
+    DATA_DIR = "/app/data"
 else:
-    DB_PATH = "data/correspondances.duckdb"
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # Environnement local
+    DATA_DIR = "data"
+
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "correspondances.duckdb")
 
 # Constantes pour la structure des fichiers
 COLUMN_NAMES = [
