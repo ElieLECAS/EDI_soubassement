@@ -537,19 +537,89 @@ def transform_file(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 def render_transformation_tab():
     """Onglet de transformation de fichiers"""
-    st.subheader("📁 Importer votre fichier")
+    st.subheader("📁 Importer vos fichiers")
     
-    uploaded_file = st.file_uploader(
-        "Glissez-déposez votre fichier CSV ou Excel ici",
+    # Initialiser la session state pour stocker les fichiers
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = {}
+    
+    # Zone d'upload avec support de plusieurs fichiers
+    uploaded_files = st.file_uploader(
+        "Glissez-déposez un ou plusieurs fichiers CSV ou Excel ici",
         type=['csv', 'xlsx', 'xls'],
-        help="Formats acceptés : CSV, Excel (.xlsx, .xls). Le traitement démarre automatiquement."
+        accept_multiple_files=True,
+        help="Formats acceptés : CSV, Excel (.xlsx, .xls). Vous pouvez ajouter plusieurs fichiers qui seront combinés."
     )
     
-    if uploaded_file is not None:
+    # Ajouter les nouveaux fichiers à la session state
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            # Utiliser le nom du fichier comme clé unique
+            file_key = uploaded_file.name
+            if file_key not in st.session_state.uploaded_files:
+                # Stocker le contenu du fichier en mémoire
+                uploaded_file.seek(0)
+                file_content = uploaded_file.read()
+                uploaded_file.seek(0)
+                st.session_state.uploaded_files[file_key] = {
+                    'name': uploaded_file.name,
+                    'content': file_content,
+                    'size': uploaded_file.size
+                }
+    
+    # Afficher la liste des fichiers chargés avec possibilité de les retirer
+    if st.session_state.uploaded_files:
+        st.markdown("---")
+        st.markdown("### 📋 Fichiers chargés")
+        
+        # Afficher les fichiers avec un bouton pour les retirer
+        files_to_remove = []
+        for file_key, file_info in st.session_state.uploaded_files.items():
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                st.text(f"📄 {file_info['name']} ({file_info['size']} octets)")
+            with col2:
+                if st.button("🗑️ Retirer", key=f"remove_{file_key}", use_container_width=True):
+                    files_to_remove.append(file_key)
+        
+        # Retirer les fichiers sélectionnés
+        for file_key in files_to_remove:
+            del st.session_state.uploaded_files[file_key]
+            st.rerun()
+        
+        # Bouton pour tout réinitialiser
+        if st.button("🗑️ Tout retirer", use_container_width=True, type="secondary"):
+            st.session_state.uploaded_files = {}
+            st.rerun()
+        
+        st.markdown("---")
+    
+    # Traiter les fichiers si au moins un est présent
+    if st.session_state.uploaded_files:
         try:
-            with st.spinner("📥 Lecture et préparation du fichier..."):
-                df = read_file(uploaded_file)
-                df = prepare_dataframe(df)
+            with st.spinner("📥 Lecture et préparation des fichiers..."):
+                # Combiner tous les fichiers en un seul DataFrame
+                dfs = []
+                file_names = []
+                
+                for file_key, file_info in st.session_state.uploaded_files.items():
+                    # Reconstruire l'objet fichier depuis le contenu stocké
+                    file_like = io.BytesIO(file_info['content'])
+                    file_like.name = file_info['name']
+                    
+                    # Lire et préparer le fichier
+                    df = read_file(file_like)
+                    df = prepare_dataframe(df)
+                    dfs.append(df)
+                    file_names.append(file_info['name'])
+                
+                # Combiner tous les DataFrames
+                if len(dfs) > 1:
+                    df = pd.concat(dfs, ignore_index=True)
+                    st.success(f"✅ {len(dfs)} fichier(s) combiné(s) : {len(df)} ligne(s) au total")
+                else:
+                    df = dfs[0]
+                    st.success(f"✅ Fichier chargé : {len(df)} ligne(s)")
             
             # Transformation automatique
             with st.spinner("🔄 Transformation en cours..."):
@@ -569,7 +639,7 @@ def render_transformation_tab():
                     st.download_button(
                         label="📥 Télécharger les lignes sans correspondance (CSV)",
                         data=csv_buffer_no_match.getvalue().encode('utf-8-sig'),
-                        file_name=f"lignes_sans_correspondance_{uploaded_file.name.replace('.xlsx', '.csv').replace('.xls', '.csv')}",
+                        file_name="lignes_sans_correspondance.csv",
                         mime="text/csv; charset=utf-8",
                         use_container_width=True
                     )
@@ -579,23 +649,29 @@ def render_transformation_tab():
                     st.download_button(
                         label="📥 Télécharger les lignes sans correspondance (Excel)",
                         data=excel_buffer_no_match.getvalue(),
-                        file_name=f"lignes_sans_correspondance_{uploaded_file.name.replace('.csv', '.xlsx')}",
+                        file_name="lignes_sans_correspondance.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
                 st.markdown("---")
             
             # Afficher le fichier transformé
-            st.subheader("✅ Fichier transformé")
+            st.subheader("✅ Fichier(s) transformé(s)")
+            st.info(f"📊 Total : {len(df_transformed)} ligne(s) provenant de {len(file_names)} fichier(s)")
             st.dataframe(df_transformed, use_container_width=True)
             
             # Téléchargement
             st.markdown("---")
             st.subheader("💾 Télécharger le résultat")
-            _render_download_buttons(df_transformed, uploaded_file.name)
+            # Créer un nom de fichier combiné
+            if len(file_names) == 1:
+                combined_name = file_names[0]
+            else:
+                combined_name = f"combine_{len(file_names)}_fichiers"
+            _render_download_buttons(df_transformed, combined_name)
         
         except Exception as e:
-            st.error(f"❌ Erreur lors du traitement du fichier : {str(e)}")
+            st.error(f"❌ Erreur lors du traitement des fichiers : {str(e)}")
             st.exception(e)
     else:
         _render_instructions()
@@ -681,10 +757,12 @@ def _render_instructions():
     """Affiche les instructions"""
     st.info("""
     👆 **Instructions :**
-    1. Glissez-déposez votre fichier CSV ou Excel ci-dessus
-    2. Le traitement démarre automatiquement
-    3. Visualisez le fichier transformé
-    4. Téléchargez le résultat
+    1. Glissez-déposez un ou plusieurs fichiers CSV ou Excel ci-dessus
+    2. Ajoutez des fichiers un par un ou plusieurs d'un coup - ils s'accumulent automatiquement
+    3. Les fichiers sont combinés en un seul tableau
+    4. Le traitement démarre automatiquement
+    5. Visualisez le fichier transformé
+    6. Téléchargez le résultat combiné
     """)
 
 # ==============================================================================
