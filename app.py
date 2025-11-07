@@ -350,7 +350,10 @@ def add_laquage_column(df: pd.DataFrame) -> pd.DataFrame:
     return df_result
 
 def fill_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Remplit les colonnes Date et Denomination vides"""
+    """Remplit les colonnes Date et Denomination vides
+    Si A (Date) et F (Denomination) sont vides, copie les valeurs de la ligne du dessus
+    tant que B (Reference) est identique
+    """
     df_result = df.copy()
     
     if len(df.columns) < 6:
@@ -358,30 +361,35 @@ def fill_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
     
     col_a = find_column(df, 'Date', fallback_index=0)
     col_b = find_column(df, 'N de cde', 'Reference', fallback_index=1)
-    col_c = find_column(df, 'Code', fallback_index=6)
     col_f = find_column(df, 'Denomination', fallback_index=9)
     
-    if not all([col_a, col_b, col_c, col_f]):
+    if not all([col_a, col_b, col_f]):
         return df_result
     
-    for idx in df_result.index:
-        val_a, val_f = df_result.loc[idx, col_a], df_result.loc[idx, col_f]
+    # Convertir l'index en liste pour pouvoir itérer avec position
+    index_list = list(df_result.index)
+    
+    # Parcourir les lignes de haut en bas (à partir de la deuxième ligne)
+    for idx_pos in range(1, len(index_list)):
+        idx = index_list[idx_pos]
+        prev_idx = index_list[idx_pos - 1]
+        
+        # Vérifier si Date (A) et Denomination (F) sont vides pour la ligne courante
+        val_a = df_result.loc[idx, col_a]
+        val_f = df_result.loc[idx, col_f]
         
         if is_empty(val_a) and is_empty(val_f):
-            val_b, val_c = df_result.loc[idx, col_b], df_result.loc[idx, col_c]
+            # Vérifier si la Reference (B) est identique à la ligne du dessus
+            val_b = df_result.loc[idx, col_b]
+            prev_b = df_result.loc[prev_idx, col_b]
             
-            for other_idx in df_result.index:
-                if other_idx != idx:
-                    other_b = df_result.loc[other_idx, col_b]
-                    other_c = df_result.loc[other_idx, col_c]
-                    other_a = df_result.loc[other_idx, col_a]
-                    other_f = df_result.loc[other_idx, col_f]
-                    
-                    if val_b == other_b and val_c == other_c:
-                        if not is_empty(other_a) and not is_empty(other_f):
-                            df_result.loc[idx, col_a] = other_a
-                            df_result.loc[idx, col_f] = other_f
-                            break
+            if val_b == prev_b:
+                # Copier Date et Denomination de la ligne du dessus
+                prev_a = df_result.loc[prev_idx, col_a]
+                prev_f = df_result.loc[prev_idx, col_f]
+                
+                df_result.loc[idx, col_a] = prev_a
+                df_result.loc[idx, col_f] = prev_f
     
     return df_result
 
